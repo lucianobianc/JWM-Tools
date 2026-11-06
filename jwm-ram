@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""Instantaneous RAM, swap, CPU and battery indicators for JWM Swallow (Linux)."""
+import argparse
+from pathlib import Path
+import tkinter as tk
+import tkinter.font as tkfont
+
+INTERVAL_MS = 1000
+BACKGROUND = '#202020'
+MARGIN = 2
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--width', type=int, default=72, metavar='PIXELS',
+                    help='total widget width in pixels (default: 72)')
+parser.add_argument('--height', type=int, default=30, metavar='PIXELS',
+                    help='total widget height in pixels (default: 30)')
+parser.add_argument('--spacing', type=int, default=5, metavar='PIXELS',
+                    help='gap between bars in pixels (default: 5)')
+parser.add_argument('--temp-source', choices=('package', 'hottest-core'), default='package',
+                    help='CPU temperature sensor (default: package)')
+theme = parser.add_mutually_exclusive_group()
+theme.add_argument('--dark-mode', action='store_true',
+                   help='dark background and tooltip (default)')
+theme.add_argument('--white-mode', action='store_true',
+                   help='light background and tooltip')
+parser.add_argument('--tooltip-fg', default=None, metavar='COLOR',
+                    help='tooltip text color (theme default unless specified)')
+parser.add_argument('--tooltip-bg', default=None, metavar='COLOR',
+                    help='tooltip background color (theme default unless specified)')
+parser.add_argument('--tooltip-font', default='TkDefaultFont', metavar='FONT',
+                    help='Tk font name or description (default: TkDefaultFont)')
+parser.add_argument('--tooltip-fontsize', type=int, default=None, metavar='POINTS',
+                    help='tooltip font size in points (default: font size from --tooltip-font)')
+for name, default in (('ram', '#65c565'),
+                      ('swap', '#f0a040'),
+                      ('cpu', '#58a6ff'),
+                      ('battery', '#a66be3')):
+    parser.add_argument(f'--{name}fg', default=default, metavar='COLOR',
+                        help=f'{name.upper()} used-bar color (default: {default})')
+    parser.add_argument(f'--{name}bg', default=None, metavar='COLOR',
+                        help=f'{name.upper()} empty-bar color (theme default unless specified)')
+    parser.add_argument(f'--no-{name}', action='store_true',
+                        help=f'hide {name.upper()} indicator')
+args = parser.parse_args()
+if args.tooltip_fontsize is not None and args.tooltip_fontsize < 1:
+    parser.error('--tooltip-fontsize must be a positive integer')
+# CLI overrides take precedence over theme colors.
+if args.white_mode:
+    background = '#f4f4f4'
+    empty_color = '#dedede'
+    border_color = '#aaaaaa'
+    error_color = '#202020'
+    tooltip_fg = '#202020'
+    tooltip_bg = '#ffffff'
+else:
+    background = BACKGROUND
+    empty_color = BACKGROUND
+    border_color = '#454545'
+    error_color = 'white'
+    tooltip_fg = '#eeeeee'
+    tooltip_bg = '#262626'
+for name in ('ram', 'swap', 'cpu', 'battery'):
+    if getattr(args, f'{name}bg') is None:
+        setattr(args, f'{name}bg', empty_color)
+if args.tooltip_fg is None:
+    args.tooltip_fg = tooltip_fg
+if args.tooltip_bg is None:
+    args.tooltip_bg = tooltip_bg
+visible = [name for name in ('ram', 'swap', 'cpu', 'battery')
+           if not getattr(args, f'no_{name}')]
+if not visible:
+    parser.error('at least one indicator must remain enabled')
+if args.height < 8 or args.spacing < 0:
+    parser.error('--height must be at least 8 and --spacing cannot be negative')
+bar_width = (args.width - 2 * MARGIN - (len(visible) - 1) * args.spacing) / len(visible)
+if bar_width < 5:
+    parser.error('--width is too small for the selected indicators and spacing')
+
+
+def memory_fractions():
+    values = {}
+    with open('/proc/meminfo', encoding='ascii') as stream:
+        for line in stream:
+            key, _, value = line.partition(':')
+            if key in ('MemTotal', 'MemAvailable', 'SwapTotal', 'SwapFree'):
+                values[key] = int(value.strip().split()[0])
+    ram_total = values['MemTotal']
+    swap_total = values['SwapTotal']
+    ram = (ram_total - values['MemAvailable']) / ram_total if ram_total else 0.0
+    swap = (swap_total - values['SwapFree']) / swap_total if swap_total else 0.0
+    return (ram, swap), (ram_total - values['MemAvailable'], ram_total), (swap_total - values['SwapFree'], swap_total)
+
+
+def battery_reading():
+    """Return battery charge fraction and a description, or N/A if absent."""
+    supply_dir = Path('/sys/class/power_supply')
+    for directory in sorted(supply_dir.glob('*')):
+        try:
+            if (directory / 'type').read_text().strip() != 'Battery':
+                continue
+            capacity_path = directory / 'capacity'
+            if capacity_path.exists():
+                fraction = int(capacity_path.read_text().strip()) / 100
+            else:
+                fraction = None
+                for prefix in ('energy', 'charge'):
+                    now_file = directory / f'{prefix}_now'
+                    full_file = directory / f'{prefix}_full'
+                    if now_file.exists() and full_file.exists():
+                        total = int(full_file.read_text().strip())
+                        fraction = int(now_file.read_text().strip()) / total if total else None
+                        break
+                if fraction is None:
+                    continue
+            status_file = directory / 'status'
+            status = status_file.read_text().strip() if status_file.exists() else ''
+            fraction = max(0.0, min(1.0, fraction))
+            detail = f'{fraction:.0%}'
+            if status and status != 'Unknown':
+                detail += f' ({status})'
+            return fraction, detail
+        except (OSError, ValueError, ZeroDivisionError):
+            continue
+    return None, 'N/A'
+
+
+
+def cpu_temperature():
+    """Read the selected CPU sensor in Celsius, if exposed by Linux."""
+    hwmon_root = Path('/sys/class/hwmon')
+    for hwmon in sorted(hwmon_root.glob('hwmon*')):
+        try:
+            driver = (hwmon / 'name').read_text().strip()
+            if driver not in ('coretemp', 'k10temp', 'zenpower'):
+                continue
+            package = []
+            cores = []
+            for sensor in sorted(hwmon.glob('temp*_input')):
+                label_file = sensor.with_name(sensor.name.replace('_input', '_label'))
+                label = label_file.read_text().strip() if label_file.exists() else ''
+                value = int(sensor.read_text().strip()) / 1000
+                if not (-20 <= value <= 125):
+                    continue
+                if label.startswith('Package id') or label in ('Tctl', 'Tdie'):
+                    package.append(value)
+                elif label.startswith('Core '):
+                    cores.append(value)
+            if args.temp_source == 'hottest-core':
+                readings = cores or package
+            else:
+                readings = package or cores
+            if readings:
+                return f'{max(readings):.0f} °C'
+        except (OSError, ValueError):
+            continue
+    if args.temp_source == 'package':
+        for zone in sorted(Path('/sys/class/thermal').glob('thermal_zone*')):
+            try:
+                if (zone / 'type').read_text().strip() != 'x86_pkg_temp':
+                    continue
+                value = int((zone / 'temp').read_text().strip()) / 1000
+                if -20 <= value <= 125:
+                    return f'{value:.0f} °C'
+            except (OSError, ValueError):
+                continue
+    return 'N/A'
+
+
+def cpu_counters():
+    with open('/proc/stat', encoding='ascii') as stream:
+        fields = stream.readline().split()
+    times = list(map(int, fields[1:]))
+    total = sum(times)
+    idle = times[3] + times[4]  # idle + iowait
+    return total, idle
+
+
+root = tk.Tk(className='jwm-ram')
+root.title('jwm-ram')
+root.resizable(False, False)
+root.geometry(f'{args.width}x{args.height}')
+root.configure(bg=background)
+canvas = tk.Canvas(root, width=args.width, height=args.height, bg=background,
+                   highlightthickness=0, bd=0)
+canvas.pack()
+previous_cpu = None
+latest_details = {}
+
+# An undecorated, independent popup avoids changing the Swallow geometry.
+tooltip = tk.Toplevel(root)
+tooltip.withdraw()
+tooltip.overrideredirect(True)
+tooltip.attributes('-topmost', True)
+tooltip_font = args.tooltip_font
+if args.tooltip_fontsize is not None:
+    # Make an independent font so TkDefaultFont and other widgets stay unchanged.
+    tooltip_font = tkfont.Font(root=root, font=args.tooltip_font)
+    tooltip_font.configure(size=args.tooltip_fontsize)
+tooltip_label = tk.Label(tooltip, bg=args.tooltip_bg, fg=args.tooltip_fg,
+                         font=tooltip_font, justify='left',
+                         padx=8, pady=5, relief='solid', bd=1)
+tooltip_label.pack()
+hovering = False
+
+
+def format_size(kib):
+    if kib >= 1024 * 1024:
+        return f'{kib / (1024 * 1024):.1f} GiB'
+    return f'{kib / 1024:.0f} MiB'
+
+
+def system_uptime():
+    """Return elapsed time since boot, using the Linux kernel uptime counter."""
+    try:
+        with open('/proc/uptime', encoding='ascii') as stream:
+            seconds = int(float(stream.read().split()[0]))
+    except (OSError, ValueError, IndexError):
+        return 'N/A'
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes = remainder // 60
+    if days:
+        return f'{days}d {hours}h {minutes}m'
+    if hours:
+        return f'{hours}h {minutes}m'
+    return f'{minutes}m'
+
+
+def tooltip_text():
+    labels = {'ram': 'RAM', 'swap': 'Swap', 'cpu': 'CPU', 'battery': 'Battery'}
+    indicators = '\n'.join(f'{labels[name]}: {latest_details.get(name, "N/A")}'
+                           for name in visible)
+    return f'{indicators}\nUptime: {system_uptime()}'
+
+
+def place_tooltip():
+    """Keep the popup outside the widget to avoid Enter/Leave oscillation."""
+    tooltip.update_idletasks()
+    width = tooltip.winfo_reqwidth()
+    height = tooltip.winfo_reqheight()
+    screen_w = root.winfo_screenwidth()
+    screen_h = root.winfo_screenheight()
+    widget_x = canvas.winfo_rootx()
+    widget_y = canvas.winfo_rooty()
+    widget_h = canvas.winfo_height()
+
+    x = max(0, min(widget_x, screen_w - width))
+    if widget_y >= height + 4:
+        y = widget_y - height - 4
+    else:
+        y = widget_y + widget_h + 4
+    y = max(0, min(y, screen_h - height))
+    tooltip.geometry(f'+{x}+{y}')
+
+
+def on_enter(_event):
+    global hovering
+    hovering = True
+    tooltip_label.configure(text=tooltip_text())
+    place_tooltip()
+    tooltip.deiconify()
+
+
+def on_leave(_event):
+    global hovering
+    hovering = False
+    tooltip.withdraw()
+
+
+canvas.bind('<Enter>', on_enter)
+canvas.bind('<Leave>', on_leave)
+
+
+def refresh():
+    global previous_cpu, latest_details
+    try:
+        fractions = {}
+        details = {}
+        if 'ram' in visible or 'swap' in visible:
+            (fractions['ram'], fractions['swap']), ram_usage, swap_usage = memory_fractions()
+            for name, (used, total) in (('ram', ram_usage), ('swap', swap_usage)):
+                if name in visible:
+                    details[name] = (f'{fractions[name]:.0%} '
+                                     f'({format_size(used)} / {format_size(total)})')
+        if 'cpu' in visible:
+            current_cpu = cpu_counters()
+            cpu = 0.0
+            if previous_cpu is not None:
+                elapsed = current_cpu[0] - previous_cpu[0]
+                if elapsed > 0:
+                    cpu = 1 - (current_cpu[1] - previous_cpu[1]) / elapsed
+            previous_cpu = current_cpu
+            fractions['cpu'] = cpu
+            details['cpu'] = f'{max(0, min(1, cpu)):.0%} | {cpu_temperature()}'
+
+        if 'battery' in visible:
+            charge, description = battery_reading()
+            fractions['battery'] = charge if charge is not None else 0.0
+            details['battery'] = description
+
+        latest_details = details
+        if hovering:
+            tooltip_label.configure(text=tooltip_text())
+        canvas.delete('all')
+        for i, name in enumerate(visible):
+            fraction = max(0.0, min(1.0, fractions[name]))
+            left = MARGIN + i * (bar_width + args.spacing)
+            right = left + bar_width
+            canvas.create_rectangle(left, 1, right, args.height - 2,
+                                    fill=getattr(args, f'{name}bg'),
+                                    outline=border_color, width=1)
+            fill_height = round(fraction * (args.height - 5))
+            if fill_height:
+                canvas.create_rectangle(left + 2, args.height - 3 - fill_height,
+                                        right - 2, args.height - 3,
+                                        fill=getattr(args, f'{name}fg'), outline='')
+    except (OSError, ValueError, KeyError, IndexError):
+        latest_details = {}
+        if hovering:
+            tooltip_label.configure(text=tooltip_text())
+        canvas.delete('all')
+        canvas.create_text(args.width // 2, args.height // 2,
+                           text='N/A', fill=error_color)
+    root.after(INTERVAL_MS, refresh)
+
+
+refresh()
+root.mainloop()

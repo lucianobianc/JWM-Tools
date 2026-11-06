@@ -1,0 +1,869 @@
+#!/usr/bin/env python3
+"""JWM style editor. Edits only style tags, preserving unrelated XML verbatim."""
+import os
+import json
+import copy
+import re
+import sys
+import stat
+import shutil
+import tempfile
+import subprocess
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk, Gdk, GLib, GdkPixbuf
+
+STYLES = ['WindowStyle', 'TrayStyle', 'TaskListStyle', 'PagerStyle', 'MenuStyle', 'PopupStyle']
+COLORS = ['Foreground', 'Background']
+PRESETS = {
+    'Graphite & Amber': {'base': '#35383B', 'text': '#E5E1D8', 'accent': '#D09A52', 'accent_text': '#202124', 'muted': '#B8B6AF', 'dark': '#202124'},
+    'Slate Lavender': {'base': '#343744', 'text': '#E6E6ED', 'accent': '#9295AD', 'accent_text': '#161820', 'muted': '#C5C3D4', 'dark': '#242630'},
+    'Classic Motif': {'base': '#444B50', 'text': '#DFE4DF', 'accent': '#829B9D', 'accent_text': '#20282A', 'muted': '#B8C5C2', 'dark': '#292D30'},
+    'Midnight Teal': {'base': '#293940', 'text': '#DAE4E1', 'accent': '#659A99', 'accent_text': '#19252B', 'muted': '#A5BDBB', 'dark': '#19252B'},
+}
+
+# Each palette: dark, base, accent, muted, light. These are JWM adaptations,
+# not exact historical color extractions.
+COLLECTIONS = {
+    'Original': {
+        'Graphite & Amber': None, 'Slate Lavender': None,
+        'Classic Motif': None, 'Midnight Teal': None,
+    },
+    'Heritage': {
+        'Redmond': '#1746A0 #245EDC #5C91ED #A6CAF0 #ECE9D8',
+        'Redmond Silver': '#53576F #8589A8 #B1B4CB #D7D9E5 #ECECF1',
+        'Redmond Olive': '#40542D #66794A #91A477 #C8D3A7 #ECE9D8',
+        'Mountain View': '#424A56 #4C719E #858F9B #B5B9BE #ECECEA',
+        'Palo Alto': '#665D60 #B67D7B #D49A91 #D6C3BB #F0ECE5',
+        'Santa Clara': '#574C8F #7972A7 #A5A0C3 #C7C5D6 #E3E2E9',
+        'Austin': '#25256D #4545A2 #7979C0 #B6B6D5 #E3E3EB',
+    },
+    'Modern': {
+        'Porcelain': '#374454 #CCD4DC #7998B5 #E9EAEB #F8F8F6',
+        'Arctic': '#354C60 #B6D0DE #759EB8 #DFEAF0 #F5F9FB',
+        'Linen': '#414944 #B9C4B0 #85988A #E9E1D1 #FAF6EC',
+        'Wisteria': '#494156 #C9BBD9 #9884B7 #E8E1F1 #F8F6FB',
+        'Seashell': '#594C58 #F0DDD7 #DCA99E #FBF6F0 #FBF6F0',
+    },
+    'Chromatic': {
+        'Azure': '#284E78 #5F8FB8 #9FC1D5 #D6E5EC #F1F6F8',
+        'Amethyst': '#51466E #8E7CAD #B9ACCC #E0D9E8 #F6F3F8',
+        'Sage': '#405E51 #799B84 #AFC6AF #DCE6D7 #F4F6EE',
+        'Coral': '#875B5A #C58C83 #E1B4A7 #F1DCD1 #FBF3E9',
+        'Amber': '#70552F #B38A50 #D6B57D #EBDBC0 #FAF5EA',
+        'Slate': '#35414F #697D8C #A1B0B9 #D6DEE0 #F3F5F4',
+    },
+    'Hacker': {
+        'Phosphor': '#080F0B #12241A #57C776 #245A35 #B8F5C5',
+        'Amber Terminal': '#17120A #302414 #D69A35 #70501F #F4D38B',
+        'Cyberdeck': '#0A1018 #142A3B #37C6D0 #175D75 #B2F4F0',
+        'Matrix': '#050A06 #102415 #39E75F #176C2E #B0FFBD',
+        'Purple Haze': '#12101A #282039 #A16AE8 #593F85 #E0C8FF',
+        'Red Alert': '#130D10 #302025 #D45B65 #702D37 #F3B2AA',
+    },
+    'Pastel Workstations': {
+        'CDE Pastel': '#6D6489 #6D6489 #A79BC1 #D59B91 #E9DFC9',
+        'Vintage Workstation': '#466C68 #466C68 #C78F8C #C6CCB5 #F0E5D2',
+        'Orchid & Sage': '#665579 #665579 #A992B3 #A9BCA3 #F2E8D5',
+        'Solaris Garden': '#514C75 #514C75 #7CA69A #D58E82 #EAE1CF',
+        'Retro Pastel': '#47434F #47434F #D7A098 #A8C5B5 #E6DDD1',
+        'Lavender & Copper': '#594B65 #594B65 #C98F7C #A5AD86 #E9DDC7',
+    },
+}
+
+PRESET_METADATA = {}
+
+def readable_text(hex_color):
+    rgb = [int(hex_color[i:i+2], 16) / 255 for i in (1, 3, 5)]
+    luminance = sum(c * weight for c, weight in zip(rgb, (0.2126, 0.7152, 0.0722)))
+    return '#202124' if luminance > 0.57 else '#FFFFFF'
+
+for category, items in COLLECTIONS.items():
+    for name, swatches in items.items():
+        PRESET_METADATA[name] = {'category': category,
+                                 'description': 'Inspired palette' if category == 'Heritage' else category}
+        if swatches is None:
+            continue
+        dark, base, accent, muted, light = swatches.split()
+        PRESETS[name] = {'base': base, 'text': readable_text(base),
+                         'accent': accent, 'accent_text': readable_text(accent),
+                         'muted': muted, 'dark': dark}
+
+def preset_values(name):
+    p = PRESETS[name]
+    result = {}
+    for section in STYLES:
+        result[section] = {'Foreground': p['text'], 'Background': p['base']}
+    result['WindowStyle'].update(Foreground=p['dark'], Background=p['muted'], Width='4', Corner='0')
+    result['WindowStyle']['Active'] = {'Foreground': p['accent_text'], 'Background': p['accent']}
+    result['TrayStyle']['Font'] = 'Sans-12'
+    result['TaskListStyle']['Active'] = {'Foreground': p['accent_text'], 'Background': p['accent']}
+    result['TaskListStyle']['Minimized'] = {'Foreground': p['muted'], 'Background': p['dark']}
+    result['PagerStyle'] = {'Foreground': p['muted'], 'Background': p['base'], 'Text': p['text'], 'Active': {'Foreground': p['accent'], 'Background': p['dark']}}
+    result['MenuStyle']['Active'] = {'Foreground': p['accent_text'], 'Background': p['accent']}
+    result['PopupStyle'] = {'Foreground': p['dark'], 'Background': p['muted']}
+    return result
+
+CUSTOM_DIR = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))) / 'jwm-style-editor' / 'styles'
+
+def custom_styles():
+    result = {}
+    if CUSTOM_DIR.is_dir():
+        for file in sorted(CUSTOM_DIR.glob('*.json')):
+            try:
+                obj = json.loads(file.read_text(encoding='utf-8'))
+                if isinstance(obj, dict) and isinstance(obj.get('name'), str) and isinstance(obj.get('values'), dict):
+                    result[obj['name']] = (obj['values'], file)
+            except (OSError, ValueError, TypeError):
+                pass
+    return result
+
+def property_values(text):
+    root = ET.fromstring(text)
+    result = {}
+    for section in STYLES:
+        node = root.find(section)
+        if node is None:
+            continue
+        values = {}
+        for child in node:
+            if child.tag in ('Active', 'Minimized'):
+                values[child.tag] = {sub.tag: (sub.text or '').strip() for sub in child if len(sub) == 0 and (sub.text or '').strip()}
+            elif len(child) == 0 and (child.text or '').strip():
+                values[child.tag] = (child.text or '').strip()
+        result[section] = values
+    return result
+
+def flatten(values):
+    result = {}
+    for section, fields in values.items():
+        if section not in STYLES or not isinstance(fields, dict):
+            continue
+        for key, value in fields.items():
+            if isinstance(value, dict):
+                for subkey, subval in value.items():
+                    if isinstance(subval, str):
+                        result[(section, (key, subkey))] = subval
+            elif isinstance(value, str):
+                result[(section, (key,))] = value
+    return result
+
+def set_nested(values, section, path, value):
+    target = values.setdefault(section, {})
+    if len(path) == 1:
+        target[path[0]] = value
+    else:
+        target.setdefault(path[0], {})[path[1]] = value
+
+# Replace comment contents with spaces without disturbing offsets.
+COMMENT = re.compile(r'<!--.*?-->', re.S)
+TAG = re.compile(r'<(/?)([A-Za-z_][\w:.-]*)(?:\s[^<>]*?)?\s*(/?)>', re.S)
+
+def masked(text):
+    return COMMENT.sub(lambda m: re.sub(r'[^\n]', ' ', m.group()), text)
+
+def find_elements(text, name, start=0, end=None):
+    """Find matching XML element ranges, ignoring comments; supports nested tags."""
+    if end is None:
+        end = len(text)
+    clean = masked(text)
+    stack = []
+    found = []
+    for m in TAG.finditer(clean, start, end):
+        closing, tag, selfclosing = m.groups()
+        if closing:
+            if not stack or stack[-1][0] != tag:
+                raise ValueError('Malformed XML around ' + tag)
+            open_tag, begin, open_end, depth = stack.pop()
+            if tag == name:
+                found.append((begin, m.end(), open_end, m.start(), depth))
+        elif not selfclosing:
+            stack.append((tag, m.start(), m.end(), len(stack)))
+        elif tag == name:
+            found.append((m.start(), m.end(), m.end(), m.end(), len(stack)))
+    return found
+
+def replace_leaf(text, parent, child, value):
+    """Update existing leaf value or append leaf; preserve all unrelated bytes."""
+    spans = find_elements(text, parent)
+    if len(spans) != 1:
+        raise ValueError(f'Expected exactly one {parent}, found {len(spans)}')
+    a, b, content_start, content_end, _ = spans[0]
+    children = [x for x in find_elements(text[content_start:content_end], child) if x[4] == 0]
+    if len(children) > 1:
+        raise ValueError(f'Multiple {child} elements inside {parent}')
+    if children:
+        ca, cb, ci, cj, _ = children[0]
+        if ci == cj:
+            raise ValueError('Self-closing leaf not supported: ' + child)
+        lo, hi = content_start + ci, content_start + cj
+        old = text[lo:hi]
+        if '<' in masked(old):
+            raise ValueError(f'{child} contains nested elements')
+        # Keep whitespace around the value; comments inside leaf are left untouched.
+        matches = list(re.finditer(r'(?s)(<!--.*?-->|[^<]+)', old))
+        visible = [m for m in matches if not m.group().startswith('<!--') and m.group().strip()]
+        if len(visible) != 1:
+            raise ValueError(f'Cannot safely edit {child} with mixed content')
+        m = visible[0]
+        segment = m.group()
+        updated = segment[:len(segment)-len(segment.lstrip())] + value + segment[len(segment.rstrip()):]
+        return text[:lo+m.start()] + updated + text[lo+m.end():]
+    indent_match = re.search(r'\n([ \t]*)<', text[content_start:content_end])
+    indent = indent_match.group(1) if indent_match else '    '
+    insertion = f'\n{indent}<{child}>{value}</{child}>'
+    return text[:content_end] + insertion + text[content_end:]
+
+def update_style(text, section, property_path, value):
+    spans = find_elements(text, section)
+    if len(spans) != 1:
+        raise ValueError(f'Expected exactly one {section}, found {len(spans)}')
+    a, b, cs, ce, _ = spans[0]
+    part = text[cs:ce]
+    if len(property_path) == 1:
+        new = replace_leaf('<root>' + part + '</root>', 'root', property_path[0], value)[6:-7]
+    else:
+        group, leaf = property_path
+        group_spans = [x for x in find_elements(part, group) if x[4] == 0]
+        if len(group_spans) != 1:
+            raise ValueError(f'Expected one {group} in {section}')
+        new = replace_leaf('<root>' + part + '</root>', group, leaf, value)[6:-7]
+    return text[:cs] + new + text[ce:]
+
+def get_value(text, section, path):
+    try:
+        root = ET.fromstring(text)
+        section_element = root.find(section)
+        if section_element is None:
+            return None
+        node = section_element
+        for name in path:
+            node = node.find(name)
+            if node is None:
+                return None
+        return (node.text or '').strip()
+    except ET.ParseError:
+        return None
+
+def save_atomic(path, data):
+    mode = stat.S_IMODE(path.stat().st_mode)
+    fd, tempname = tempfile.mkstemp(prefix='.' + path.name + '.', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(tempname, mode)
+        os.replace(tempname, path)
+    finally:
+        if os.path.exists(tempname):
+            os.unlink(tempname)
+
+def start_button(text):
+    """Locate the unambiguous root-menu TrayButton (root:N) outside comments."""
+    clean = masked(text)
+    candidates = []
+    for a, b, cs, ce, depth in find_elements(text, 'TrayButton'):
+        if re.fullmatch(r'\s*root:\d+\s*', clean[cs:ce]):
+            candidates.append((a, b, cs, ce))
+    if len(candidates) > 1:
+        raise ValueError('Multiple root-menu TrayButtons: cannot choose one safely.')
+    return candidates[0] if candidates else None
+
+
+def start_attributes(text):
+    span = start_button(text)
+    if not span:
+        return None
+    opening = text[span[0]:span[2]]
+    return {key: value for key, quote, value in re.findall(r'([\w-]+)\s*=\s*(["\'])(.*?)\2', opening, re.S)}
+
+
+def update_start_attribute(text, key, value):
+    span = start_button(text)
+    if not span:
+        raise ValueError('No root-menu TrayButton found.')
+    a, b, cs, ce = span
+    opening = text[a:cs]
+    match = re.search(r'(?<![\w-])' + re.escape(key) + r'\s*=\s*(["\'])(.*?)\1', opening, re.S)
+    from xml.sax.saxutils import escape
+    safe = escape(value, {'"': '&quot;', "'": '&apos;'})
+    if match:
+        opening = opening[:match.start(2)] + safe + opening[match.end(2):]
+    else:
+        opening = opening[:-1] + ' ' + key + '= "' + safe + '">' if opening.endswith('>') else opening
+    return text[:a] + opening + text[cs:]
+
+
+def title_button_images(text, config_path):
+    """Read JWM title-button image paths, without changing their configuration."""
+    try:
+        root = ET.fromstring(text)
+        style = root.find('WindowStyle')
+        if style is None:
+            return {}
+        result = {}
+        for key in ('ButtonClose', 'ButtonMax', 'ButtonMin', 'ButtonMaxActive',
+                    'ButtonCloseActive', 'ButtonMinActive'):
+            node = style.find(key)
+            if node is not None and (node.text or '').strip():
+                name = (node.text or '').strip()
+                file = Path(os.path.expandvars(os.path.expanduser(name)))
+                candidates = [file] if file.is_absolute() else [config_path.parent / file, Path.home() / '.jwm' / file]
+                for candidate in candidates:
+                    if candidate.is_file():
+                        result[key] = str(candidate)
+                        break
+        return result
+    except (ET.ParseError, OSError):
+        return {}
+
+class Editor(Gtk.Window):
+    def __init__(self, path):
+        super().__init__(title='JWM Style Editor')
+        self.path = path
+        self.set_default_size(1050, 710)
+        self.set_border_width(12)
+        self.original = path.read_bytes()
+        self.text = self.original.decode('utf-8')
+        ET.fromstring(self.text)
+        self.pending = {}
+        self.start_pending = {}
+        self.loading = False
+        self.custom = custom_styles()
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.add(outer)
+        top = Gtk.Box(spacing=8)
+        outer.pack_start(top, False, False, 0)
+        top.pack_start(Gtk.Label(label='Preset:'), False, False, 0)
+        self.category = Gtk.ComboBoxText()
+        for category in ['All', *COLLECTIONS, 'Custom']:
+            self.category.append_text(category)
+        self.category.set_active(0)
+        self.category.connect('changed', self.on_category)
+        top.pack_start(self.category, False, False, 0)
+        self.presets = Gtk.ComboBoxText()
+        self.refresh_presets()
+        self.presets.connect('changed', self.on_preset)
+        top.pack_start(self.presets, True, True, 0)
+        self.section = Gtk.ComboBoxText()
+        for s in STYLES + ['Start Button']:
+            self.section.append_text(s)
+        self.section.set_active(0)
+        self.section.connect('changed', self.on_section)
+        top.pack_start(self.section, False, False, 0)
+        main_area = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        main_area.set_position(425)
+        outer.pack_start(main_area, True, True, 0)
+        scroller = Gtk.ScrolledWindow()
+        main_area.pack1(scroller, resize=True, shrink=False)
+        self.grid = Gtk.Grid(column_spacing=16, row_spacing=12, margin=12)
+        scroller.add(self.grid)
+        preview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=8)
+        main_area.pack2(preview_box, resize=True, shrink=False)
+        preview_header = Gtk.Box(spacing=8)
+        preview_box.pack_start(preview_header, False, False, 0)
+        preview_header.pack_start(Gtk.Label(label='Preview:'), False, False, 0)
+        self.preview_mode = Gtk.ComboBoxText()
+        self.preview_mode.append_text('Full desktop')
+        self.preview_mode.append_text('Selected component')
+        self.preview_mode.set_active(0)
+        self.preview_mode.connect('changed', lambda *_: self.preview.queue_draw())
+        preview_header.pack_start(self.preview_mode, True, True, 0)
+        self.preview = Gtk.DrawingArea()
+        self.preview.set_size_request(340, 340)
+        self.preview.connect('draw', self.draw_preview)
+        preview_box.pack_start(self.preview, True, True, 0)
+        note = Gtk.Label(label='Preview: configured button images when available; built-in JWM glyphs are approximated.', xalign=0)
+        note.get_style_context().add_class('dim-label')
+        preview_box.pack_start(note, False, False, 0)
+        self.status = Gtk.Label(xalign=0)
+        outer.pack_start(self.status, False, False, 0)
+        bottom = Gtk.Box(spacing=8)
+        outer.pack_start(bottom, False, False, 0)
+        reset = Gtk.Button(label='Discard changes')
+        reset.connect('clicked', self.on_reset)
+        bottom.pack_start(reset, False, False, 0)
+        bottom.pack_end(self.make_button('Apply and restart JWM', self.on_apply), False, False, 0)
+        bottom.pack_end(self.make_button('Save style…', self.on_save_style), False, False, 0)
+        bottom.pack_end(self.make_button('Delete style', self.on_delete_style), False, False, 0)
+        bottom.pack_end(self.make_button('Rename style…', self.on_rename_style), False, False, 0)
+        self.detect_preset()
+        self.on_section()
+
+    def visible_presets(self):
+        category = self.category.get_active_text() or 'All'
+        builtin = [name for name in PRESETS if category in ('All', PRESET_METADATA[name]['category'])]
+        custom = list(self.custom) if category in ('All', 'Custom') else []
+        return ['Custom (current configuration)', *builtin, *custom]
+
+    def on_category(self, *_):
+        if not hasattr(self, 'presets'):
+            return
+        self.loading = True
+        self.refresh_presets()
+        self.loading = False
+        self.on_section()
+
+    def refresh_presets(self, selected=None):
+        self.custom = custom_styles()
+        self.presets.remove_all()
+        choices = self.visible_presets()
+        for name in choices:
+            self.presets.append_text(name)
+        self.presets.set_active(choices.index(selected) if selected in choices else 0)
+
+    def detect_preset(self):
+        actual = flatten(property_values(self.text))
+        for name in [*PRESETS, *self.custom]:
+            values = preset_values(name) if name in PRESETS else self.custom[name][0]
+            target = flatten(values)
+            if target and all(actual.get(k) == v for k, v in target.items()):
+                category = PRESET_METADATA[name]['category'] if name in PRESETS else 'Custom'
+                self.loading = True
+                self.category.set_active(['All', *COLLECTIONS, 'Custom'].index(category))
+                self.refresh_presets(name)
+                self.loading = False
+                self.on_section()
+                return
+
+    def make_button(self, label, callback):
+        b = Gtk.Button(label=label)
+        b.connect('clicked', callback)
+        return b
+
+    def fields(self, section):
+        fields = [('Foreground',), ('Background',)]
+        if section in ('WindowStyle', 'TrayStyle', 'MenuStyle'):
+            fields += [('Font',), ('Opacity',)]
+        if section == 'WindowStyle':
+            fields += [('Width',), ('Corner',)]
+        if section == 'PagerStyle':
+            fields += [('Text',)]
+        if section in ('WindowStyle', 'TaskListStyle', 'PagerStyle', 'MenuStyle'):
+            fields += [('Active', 'Foreground'), ('Active', 'Background')]
+        if section == 'TaskListStyle':
+            fields += [('Minimized', 'Foreground'), ('Minimized', 'Background')]
+        return fields
+
+    def current(self, section, path):
+        return self.pending.get((section, path), get_value(self.text, section, path))
+
+    def on_section(self, *_):
+        self.loading = True
+        for child in self.grid.get_children():
+            self.grid.remove(child)
+        section = self.section.get_active_text()
+        if section == 'Start Button':
+            try:
+                attrs = start_attributes(self.text)
+            except ValueError as exc:
+                attrs = None
+                self.status.set_text(str(exc))
+            if attrs is None:
+                self.grid.attach(Gtk.Label(label='No unambiguous root-menu TrayButton found.', xalign=0), 0, 0, 2, 1)
+            else:
+                for i, key in enumerate(('label', 'icon', 'tooltip')):
+                    self.grid.attach(Gtk.Label(label=key.title(), xalign=0), 0, i, 1, 1)
+                    entry = Gtk.Entry()
+                    entry.set_text(self.start_pending.get(key, attrs.get(key, '')))
+                    entry.connect('changed', self.on_start_entry, key)
+                    self.grid.attach(entry, 1, i, 1, 1)
+            self.grid.show_all()
+            self.loading = False
+            self.update_status()
+            self.preview.queue_draw()
+            return
+        for i, path in enumerate(self.fields(section)):
+            key = (section, tuple(path))
+            label = Gtk.Label(label=' '.join(path), xalign=0)
+            self.grid.attach(label, 0, i, 1, 1)
+            value = self.current(section, tuple(path))
+            if path[-1] in ('Foreground', 'Background', 'Text'):
+                chooser = Gtk.ColorButton()
+                rgba = Gdk.RGBA()
+                rgba.parse(value if value and rgba.parse(value) else '#808080')
+                chooser.set_rgba(rgba)
+                chooser.set_use_alpha(False)
+                chooser.connect('color-set', self.on_color, key)
+                self.grid.attach(chooser, 1, i, 1, 1)
+            else:
+                entry = Gtk.Entry()
+                entry.set_text(value or '')
+                entry.connect('changed', self.on_entry, key)
+                self.grid.attach(entry, 1, i, 1, 1)
+        self.grid.show_all()
+        self.loading = False
+        self.update_status()
+        self.preview.queue_draw()
+
+    def on_start_entry(self, entry, key):
+        if self.loading:
+            return
+        value = entry.get_text()
+        try:
+            original = (start_attributes(self.text) or {}).get(key, '')
+        except ValueError:
+            return
+        if value != original:
+            self.start_pending[key] = value
+        else:
+            self.start_pending.pop(key, None)
+        self.update_status()
+        self.preview.queue_draw()
+
+    def on_color(self, button, key):
+        if not self.loading:
+            c = button.get_rgba()
+            self.pending[key] = '#%02X%02X%02X' % (round(c.red*255), round(c.green*255), round(c.blue*255))
+            self.update_status()
+            self.preview.queue_draw()
+
+    def on_entry(self, entry, key):
+        if not self.loading:
+            value = entry.get_text().strip()
+            if value:
+                self.pending[key] = value
+            else:
+                self.pending.pop(key, None)
+            self.update_status()
+            self.preview.queue_draw()
+
+    def on_preset(self, *_):
+        if self.loading:
+            return
+        name = self.presets.get_active_text()
+        self.pending.clear()
+        self.start_pending.clear()
+        if name in PRESETS:
+            values = preset_values(name)
+        elif name in self.custom:
+            values = self.custom[name][0]
+        else:
+            values = {}
+        actual = flatten(property_values(self.text))
+        self.pending.update({k: v for k, v in flatten(values).items() if actual.get(k) != v})
+        self.on_section()
+
+    def update_status(self):
+        self.status.set_text(f'{self.path}  •  {len(self.pending) + len(self.start_pending)} pending properties')
+
+    def on_reset(self, *_):
+        self.pending.clear()
+        self.start_pending.clear()
+        self.presets.set_active(0)
+        self.on_section()
+
+    def error(self, msg):
+        dialog = Gtk.MessageDialog(transient_for=self, flags=0, message_type=Gtk.MessageType.ERROR,
+                                   buttons=Gtk.ButtonsType.CLOSE, text='Could not save JWM configuration')
+        dialog.format_secondary_text(str(msg))
+        dialog.run()
+        dialog.destroy()
+
+    def write(self):
+        if not self.pending and not self.start_pending:
+            return True
+        try:
+            if self.path.read_bytes() != self.original:
+                raise ValueError('The configuration changed on disk. Reopen the editor to avoid overwriting it.')
+            text = self.text
+            for (section, prop), value in sorted(self.pending.items()):
+                text = update_style(text, section, prop, value)
+            for key, value in self.start_pending.items():
+                text = update_start_attribute(text, key, value)
+            ET.fromstring(text)
+            if text == self.text:
+                self.pending.clear()
+                return True
+            backup = self.path.with_name(self.path.name + '.bak')
+            shutil.copy2(self.path, backup)
+            save_atomic(self.path, text.encode('utf-8'))
+            self.text = text
+            self.original = text.encode('utf-8')
+            self.pending.clear()
+            self.start_pending.clear()
+            self.refresh_presets()
+            self.detect_preset()
+            self.on_section()
+            return True
+        except Exception as e:
+            self.error(e)
+            return False
+
+    def on_save_style(self, *_):
+        dialog = Gtk.Dialog(title='Save custom style', transient_for=self, flags=0)
+        dialog.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Save style', Gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        area.set_border_width(12)
+        area.pack_start(Gtk.Label(label='Style name:', xalign=0), False, False, 0)
+        entry = Gtk.Entry()
+        current_name = self.presets.get_active_text()
+        if current_name in self.custom:
+            entry.set_text(current_name)
+        area.pack_start(entry, False, False, 0)
+        dialog.show_all()
+        response = dialog.run()
+        name = entry.get_text().strip()
+        dialog.destroy()
+        if response != Gtk.ResponseType.OK:
+            return
+        if not name or '/' in name or '\\' in name or name in PRESETS or name == 'Custom (current configuration)':
+            self.error('Choose a nonempty unique style name without path separators.')
+            return
+        try:
+            values = property_values(self.text)
+            for (section, path), value in self.pending.items():
+                set_nested(values, section, path, value)
+            CUSTOM_DIR.mkdir(parents=True, exist_ok=True)
+            filename = re.sub(r'[^a-zA-Z0-9_-]+', '-', name).strip('-') or 'style'
+            target = self.custom[name][1] if name in self.custom else CUSTOM_DIR / (filename + '.json')
+            if target.exists() and name not in self.custom:
+                raise ValueError('A style file with this filename already exists.')
+            if target.exists():
+                confirm = Gtk.MessageDialog(transient_for=self, message_type=Gtk.MessageType.QUESTION,
+                                            buttons=Gtk.ButtonsType.YES_NO, text=f'Replace saved style "{name}"?')
+                response = confirm.run()
+                confirm.destroy()
+                if response != Gtk.ResponseType.YES:
+                    return
+            payload = json.dumps({'name': name, 'category': 'Custom', 'description': '', 'values': values}, indent=2, ensure_ascii=False) + '\n'
+            if target.exists():
+                save_atomic(target, payload.encode('utf-8'))
+            else:
+                target.write_text(payload, encoding='utf-8')
+            self.loading = True
+            self.category.set_active(0)
+            self.refresh_presets(name)
+            self.loading = False
+            self.update_status()
+        except Exception as e:
+            self.error(e)
+
+    def on_rename_style(self, *_):
+        name = self.presets.get_active_text()
+        if name not in self.custom:
+            self.error('Select a saved custom style to rename.')
+            return
+        dialog = Gtk.Dialog(title='Rename style', transient_for=self, flags=0)
+        dialog.add_buttons('Cancel', Gtk.ResponseType.CANCEL, 'Rename', Gtk.ResponseType.OK)
+        entry = Gtk.Entry()
+        entry.set_text(name)
+        entry.set_margin_top(12)
+        entry.set_margin_bottom(12)
+        dialog.get_content_area().pack_start(entry, False, False, 0)
+        dialog.show_all()
+        response = dialog.run()
+        new_name = entry.get_text().strip()
+        dialog.destroy()
+        if response != Gtk.ResponseType.OK or new_name == name:
+            return
+        if not new_name or '/' in new_name or '\\' in new_name or new_name in PRESETS or new_name in self.custom:
+            self.error('Choose a unique style name without path separators.')
+            return
+        try:
+            old_path = self.custom[name][1]
+            data = {'name': new_name, 'category': 'Custom', 'description': '', 'values': self.custom[name][0]}
+            new_file = re.sub(r'[^a-zA-Z0-9_-]+', '-', new_name).strip('-') or 'style'
+            new_path = CUSTOM_DIR / (new_file + '.json')
+            if new_path.exists():
+                raise ValueError('A style file with this name already exists.')
+            new_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+            old_path.unlink()
+            self.loading = True
+            self.category.set_active(0)
+            self.refresh_presets(new_name)
+            self.loading = False
+            self.on_section()
+        except Exception as e:
+            self.error(e)
+
+    def on_delete_style(self, *_):
+        name = self.presets.get_active_text()
+        if name not in self.custom:
+            self.error('Select a saved custom style to delete.')
+            return
+        dialog = Gtk.MessageDialog(transient_for=self, message_type=Gtk.MessageType.QUESTION,
+                                   buttons=Gtk.ButtonsType.YES_NO, text=f'Delete saved style "{name}"?')
+        answer = dialog.run()
+        dialog.destroy()
+        if answer == Gtk.ResponseType.YES:
+            try:
+                self.custom[name][1].unlink()
+                self.loading = True
+                self.refresh_presets()
+                self.loading = False
+                self.on_section()
+            except Exception as e:
+                self.error(e)
+
+    def draw_preview(self, widget, cr):
+        import math
+        width = widget.get_allocated_width()
+        height = widget.get_allocated_height()
+        section = self.section.get_active_text()
+        selected_only = self.preview_mode.get_active() == 1
+
+        def color(value, fallback):
+            rgba = Gdk.RGBA()
+            if not rgba.parse(value or fallback):
+                rgba.parse(fallback)
+            return (rgba.red, rgba.green, rgba.blue)
+
+        def paint(hexcolor):
+            cr.set_source_rgb(*color(hexcolor, '#808080'))
+
+        def rect(x, y, w, h, bg):
+            paint(bg)
+            cr.rectangle(x, y, max(w, 0), max(h, 0))
+            cr.fill()
+
+        def text(x, y, value, fg, size=12):
+            paint(fg)
+            cr.select_font_face('Sans', 0, 0)
+            cr.set_font_size(size)
+            cr.move_to(x, y)
+            cr.show_text(value)
+
+        def v(s, *path, fallback=None):
+            return self.current(s, tuple(path)) or fallback
+
+        def relief(x, y, w, h, bg, raised=True):
+            rect(x, y, w, h, bg)
+            cr.save()
+            cr.set_line_width(2)
+            # Independent top/left and bottom/right paths; never connect opposite corners.
+            cr.new_path()
+            cr.move_to(x + w - 1, y + 1)
+            cr.line_to(x + 1, y + 1)
+            cr.line_to(x + 1, y + h - 1)
+            cr.set_source_rgba(1, 1, 1, .40 if raised else .15)
+            cr.stroke()
+            cr.new_path()
+            cr.move_to(x + w - 1, y + 1)
+            cr.line_to(x + w - 1, y + h - 1)
+            cr.line_to(x + 1, y + h - 1)
+            cr.set_source_rgba(0, 0, 0, .55 if raised else .70)
+            cr.stroke()
+            cr.restore()
+
+        images = title_button_images(self.text, self.path)
+
+        def button_image(key, x, y, w, h, active):
+            path = images.get(key + 'Active') if active else None
+            path = path or images.get(key)
+            if not path:
+                return False
+            try:
+                pix = GdkPixbuf.Pixbuf.new_from_file(path)
+                ratio = min((w - 3) / pix.get_width(), (h - 3) / pix.get_height(), 1.0)
+                pw, ph = max(1, int(pix.get_width() * ratio)), max(1, int(pix.get_height() * ratio))
+                if pw != pix.get_width() or ph != pix.get_height():
+                    pix = pix.scale_simple(pw, ph, GdkPixbuf.InterpType.BILINEAR)
+                cr.save()
+                Gdk.cairo_set_source_pixbuf(cr, pix, x + (w-pw)/2, y + (h-ph)/2)
+                cr.rectangle(x + (w-pw)/2, y + (h-ph)/2, pw, ph)
+                cr.fill()
+                cr.restore()
+                return True
+            except (GLib.Error, ValueError):
+                return False
+
+        def window(x, y, w, h, active):
+            bg = v('WindowStyle', 'Active', 'Background', fallback='#D09A52') if active else v('WindowStyle', 'Background', fallback='#B8B6AF')
+            fg = v('WindowStyle', 'Active', 'Foreground', fallback='#202124') if active else v('WindowStyle', 'Foreground', fallback='#202124')
+            relief(x, y, w, h, bg)
+            rect(x+5, y+26, w-10, h-31, '#25272B' if active else '#484B4D')
+            text(x+12, y+19, 'Active window' if active else 'Inactive window', fg)
+            for i, (glyph, image_key) in enumerate([('_', 'ButtonMin'), ('□', 'ButtonMax'), ('×', 'ButtonClose')]):
+                bx = x+w-69+i*21
+                relief(bx, y+4, 19, 18, bg)
+                if not button_image(image_key, bx, y+4, 19, 18, active):
+                    text(bx+5, y+16, '-' if glyph == '_' else ('+' if glyph == '□' else 'x'), fg, 11)
+            if active:
+                text(x+16, y+54, 'luciano@devuan:~$', '#E5E1D8', 11)
+
+        def tray(x, y, w, h):
+            bg = v('TrayStyle', 'Background', fallback='#35383B')
+            fg = v('TrayStyle', 'Foreground', fallback='#E5E1D8')
+            relief(x, y, w, h, bg)
+            start = start_attributes(self.text) or {}
+            text(x+10, y+23, self.start_pending.get('label', start.get('label', 'Menu')) or 'Menu', fg)
+            for i, name in enumerate(['Terminal', 'Firefox']):
+                active = i == 0
+                bx = x+62+i*90
+                bbg = v('TaskListStyle', 'Active', 'Background', fallback='#D09A52') if active else v('TaskListStyle', 'Background', fallback='#35383B')
+                bfg = v('TaskListStyle', 'Active', 'Foreground', fallback='#202124') if active else v('TaskListStyle', 'Foreground', fallback='#E5E1D8')
+                relief(bx, y+5, 84, 27, bbg, not active)
+                text(bx+5, y+23, name, bfg, 11)
+
+        def menu(x, y):
+            bg = v('MenuStyle', 'Background', fallback='#35383B')
+            fg = v('MenuStyle', 'Foreground', fallback='#E5E1D8')
+            abg = v('MenuStyle', 'Active', 'Background', fallback='#D09A52')
+            afg = v('MenuStyle', 'Active', 'Foreground', fallback='#202124')
+            relief(x, y, 152, 111, bg)
+            for i, label in enumerate(['Applications', 'Terminal', 'Settings', 'Exit']):
+                if i == 1:
+                    rect(x+5, y+7+i*25, 142, 24, abg)
+                text(x+12, y+24+i*25, label, afg if i == 1 else fg, 12)
+
+        def pager(x, y):
+            bg = v('PagerStyle', 'Background', fallback='#35383B')
+            fg = v('PagerStyle', 'Text', fallback='#E5E1D8')
+            abg = v('PagerStyle', 'Active', 'Background', fallback='#202124')
+            rect(x, y, 156, 47, bg)
+            for i in range(4):
+                relief(x+4+i*38, y+6, 35, 35, abg if i == 0 else bg, i != 0)
+                text(x+17+i*38, y+29, str(i+1), fg, 11)
+
+        rect(0, 0, width, height, '#292B2E')
+        scale = min(width / 470, height / 400)
+        cr.save()
+        cr.translate((width-470*scale)/2, (height-400*scale)/2)
+        cr.scale(scale, scale)
+        if not selected_only or section == 'WindowStyle':
+            window(20, 18, 355, 156, True)
+            window(85, 185, 355, 116, False)
+        if not selected_only or section == 'MenuStyle':
+            menu(285 if not selected_only else 155, 80 if not selected_only else 35)
+        if not selected_only or section == 'PopupStyle':
+            bg = v('PopupStyle', 'Background', fallback='#B8B6AF')
+            fg = v('PopupStyle', 'Foreground', fallback='#202124')
+            relief(24, 313 if not selected_only else 45, 160, 34, bg)
+            text(34, 335 if not selected_only else 67, 'Sample tooltip', fg, 12)
+        if not selected_only or section in ('TrayStyle', 'TaskListStyle', 'Start Button'):
+            tray(12, 357 if not selected_only else 50, 446, 38)
+        if not selected_only or section == 'PagerStyle':
+            pager(296 if not selected_only else 150, 305 if not selected_only else 50)
+        cr.restore()
+        return False
+
+    def on_apply(self, *_):
+        if self.write():
+            try:
+                result = subprocess.run(['jwm', '-restart'], capture_output=True, text=True, timeout=10)
+                if result.returncode:
+                    raise RuntimeError(result.stderr or f'jwm exited with {result.returncode}')
+            except Exception as e:
+                self.error(f'Configuration saved, but restart failed: {e}')
+
+
+def main():
+    path = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else Path.home() / '.jwmrc'
+    if not path.is_file():
+        sys.exit(f'File not found: {path}')
+    try:
+        app = Editor(path)
+    except Exception as e:
+        sys.exit(str(e))
+    app.connect('destroy', Gtk.main_quit)
+    app.show_all()
+    Gtk.main()
+
+if __name__ == '__main__':
+    main()

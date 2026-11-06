@@ -1,0 +1,695 @@
+#!/usr/bin/env python3
+"""Compact PulseAudio/PipeWire tray mixer for GTK 3 / X11.
+
+Works with GTK3 StatusIcon-capable trays (including JWM).
+"""
+import argparse
+import logging
+import os
+import threading
+import time
+
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gdk, GLib, Gtk
+import pulsectl
+
+LOG = logging.getLogger('audiotray')
+
+
+def percentage(obj):
+    return round(obj.volume.value_flat * 100)
+
+
+def friendly(obj):
+    return getattr(obj, 'description', None) or getattr(obj, 'name', '?')
+
+
+def make_button(symbol, tooltip, callback):
+    button = Gtk.Button()
+    button.set_image(Gtk.Image.new_from_icon_name(symbol, Gtk.IconSize.BUTTON))
+    button.set_tooltip_text(tooltip)
+    button.set_relief(Gtk.ReliefStyle.NONE)
+    button.connect('clicked', callback)
+    return button
+
+
+class VolumeRow:
+    """A horizontal volume row, keeping scale stable during live event updates."""
+
+    def __init__(self, max_volume, on_volume, on_mute, icon='audio-volume-high-symbolic'):
+        self.on_volume = on_volume
+        self.on_mute = on_mute
+        self.mute = False
+        self.dragging = False
+        self.root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.mute_button = make_button(icon, 'Silenciar / ativar', self._mute)
+        self.root.pack_start(self.mute_button, False, False, 0)
+        self.scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, max_volume, 1)
+        self.scale.set_draw_value(False)
+        if max_volume > 100:
+            self.scale.add_mark(100, Gtk.PositionType.BOTTOM, '100%')
+        self.scale.set_size_request(140, -1)
+        self.scale.connect('value-changed', self._volume)
+        self.scale.connect('button-press-event', self._press)
+        self.scale.connect('button-release-event', self._release)
+        self.scale.connect('key-press-event', self._press)
+        self.scale.connect('key-release-event', self._release)
+        self.root.pack_start(self.scale, True, True, 0)
+        self.label = Gtk.Label(label='0%')
+        self.label.set_width_chars(5)
+        self.label.set_xalign(1)
+        self.root.pack_start(self.label, False, False, 0)
+
+    def _press(self, *args):
+        self.dragging = True
+        return False
+
+    def _release(self, *args):
+        self.dragging = False
+        return False
+
+    def _volume(self, scale):
+        if not getattr(self, 'updating', False):
+            self.on_volume(scale.get_value() / 100.0)
+
+    def _mute(self, *_):
+        self.on_mute(not self.mute)
+
+    def update(self, obj, is_mic=False):
+        if obj is None:
+            self.root.set_sensitive(False)
+            self.label.set_text('—')
+            return
+        self.root.set_sensitive(True)
+        self.mute = bool(obj.mute)
+        value = percentage(obj)
+        if not self.dragging:
+            self.updating = True
+            try:
+                self.scale.set_value(min(value, self.scale.get_adjustment().get_upper()))
+            finally:
+                self.updating = False
+        self.label.set_text(f'{value}%')
+        context = self.scale.get_style_context()
+        (context.add_class if value > 100 else context.remove_class)('amplified')
+        symbol = 'microphone-sensitivity-muted-symbolic' if is_mic and self.mute else (
+            'audio-volume-muted-symbolic' if self.mute else (
+                'microphone-sensitivity-high-symbolic' if is_mic else (
+                    'audio-volume-low-symbolic' if value <= 33 else
+                    'audio-volume-medium-symbolic' if value <= 66 else
+                    'audio-volume-high-symbolic')))
+        self.mute_button.set_image(Gtk.Image.new_from_icon_name(symbol, Gtk.IconSize.BUTTON))
+        self.mute_button.set_tooltip_text('Ativar' if self.mute else 'Silenciar')
+
+
+class AudioTray:
+    def __init__(self, args):
+        self.args = args
+        self.pulse = pulsectl.Pulse('audiotray-control')
+        self.closed = threading.Event()
+        self.refresh_pending = False
+        self.sinks = {}
+        self.sources = {}
+        self.streams = {}
+        self.server = None
+        self.sink = None
+        self.source = None
+        self.stream_rows = {}
+        self._build_ui()
+        self.refresh()
+        self.worker = threading.Thread(target=self._listen, daemon=True)
+        self.worker.start()
+
+    def _build_ui(self):
+        self.combo_lock = False
+        self.tray = Gtk.StatusIcon()
+        self.tray.set_from_icon_name('audio-volume-high')
+        self.tray.set_visible(True)
+        self.tray.connect('activate', lambda *_: self.toggle_popup())
+        self.tray.connect('button-press-event', self.on_tray_click)
+        self.tray.connect('popup-menu', self.context_menu)
+        self.tray.connect('scroll-event', self.on_scroll)
+
+        # A compact, fixed-size popup. It never shares geometry with the mixer.
+        self.popup = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        self.popup.set_title('AudioTray')
+        self.popup.set_decorated(False)
+        self.popup.set_resizable(False)
+        self.popup.set_skip_taskbar_hint(True)
+        self.popup.set_skip_pager_hint(True)
+        self.popup.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        self.popup.set_position(Gtk.WindowPosition.NONE)
+        self.popup.set_border_width(12)
+        self.popup.connect('focus-out-event', self.on_focus_out)
+        self.popup.connect('key-press-event', self.on_key)
+        self.popup.connect('delete-event', lambda *_: (self.popup.hide(), True)[1])
+
+        primary = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        primary.set_size_request(185, -1)
+        self.popup.add(primary)
+
+        title = Gtk.Label()
+        title.set_markup('<b>Volume</b>')
+        title.set_xalign(0)
+        primary.pack_start(title, False, False, 0)
+
+        vertical_area = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
+        vertical_area.set_halign(Gtk.Align.CENTER)
+        primary.pack_start(vertical_area, True, True, 0)
+        self.vertical = Gtk.Scale.new_with_range(Gtk.Orientation.VERTICAL, 0, self.args.max_volume, 1)
+        self.vertical.set_inverted(True)
+        self.vertical.set_draw_value(False)
+        if self.args.max_volume > 100:
+            self.vertical.add_mark(100, Gtk.PositionType.LEFT, '100%')
+        self.vertical.set_size_request(46, 156)
+        self.vertical.connect('value-changed', self.on_master_change)
+        self.master_dragging = False
+        self.vertical.connect('button-press-event', self.master_press)
+        self.vertical.connect('button-release-event', self.master_release)
+        self.vertical.connect('key-press-event', self.master_press)
+        self.vertical.connect('key-release-event', self.master_release)
+        vertical_area.pack_start(self.vertical, False, False, 0)
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        side.set_valign(Gtk.Align.CENTER)
+        vertical_area.pack_start(side, False, False, 0)
+        self.value_label = Gtk.Label(label='—')
+        side.pack_start(self.value_label, False, False, 0)
+        self.master_mute = make_button('audio-volume-high-symbolic', 'Mute', self.toggle_master_mute)
+        side.pack_start(self.master_mute, False, False, 0)
+
+        self.out_label = Gtk.Label(label='Sem saída')
+        self.out_label.set_line_wrap(True)
+        self.out_label.set_max_width_chars(24)
+        self.out_label.set_ellipsize(3)
+        primary.pack_start(self.out_label, False, False, 0)
+
+        mixer_button = Gtk.Button(label='Abrir mixer…')
+        mixer_button.connect('clicked', self.open_mixer)
+        primary.pack_start(mixer_button, False, False, 0)
+
+        # A normal top-level window, managed independently by JWM.
+        self.mixer = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        self.mixer.set_title('AudioTray — Mixer')
+        self.mixer.set_position(Gtk.WindowPosition.CENTER)
+        self.mixer.set_default_size(500, 650)
+        self.mixer.set_size_request(360, 320)
+        self.mixer.connect('delete-event', lambda *_: (self.mixer.hide(), True)[1])
+        self.mixer.connect('key-press-event', self.on_mixer_key)
+
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        content.set_border_width(12)
+        self.mixer.add(content)
+
+        label = Gtk.Label()
+        label.set_markup('<b>Volume principal</b>')
+        label.set_xalign(0)
+        content.pack_start(label, False, False, 0)
+        self.mixer_master = VolumeRow(self.args.max_volume, self.set_master_volume,
+                                      self.set_master_mute)
+        content.pack_start(self.mixer_master.root, False, False, 0)
+
+        label = Gtk.Label()
+        label.set_markup('<b>Aplicativos</b>')
+        label.set_xalign(0)
+        content.pack_start(label, False, False, 0)
+        self.stream_scroller = Gtk.ScrolledWindow()
+        self.stream_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.stream_scroller.set_min_content_height(230)
+        self.stream_scroller.set_vexpand(True)
+        content.pack_start(self.stream_scroller, True, True, 0)
+        self.stream_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.stream_box.set_border_width(4)
+        self.stream_scroller.add(self.stream_box)
+
+        label = Gtk.Label()
+        label.set_markup('<b>Saída</b>')
+        label.set_xalign(0)
+        content.pack_start(label, False, False, 0)
+        self.output_combo = Gtk.ComboBoxText()
+        self.output_combo.connect('changed', self.select_output)
+        content.pack_start(self.output_combo, False, False, 0)
+        self.output_port = Gtk.ComboBoxText()
+        self.output_port.connect('changed', self.select_output_port)
+        content.pack_start(self.output_port, False, False, 0)
+
+        label = Gtk.Label()
+        label.set_markup('<b>Microfone</b>')
+        label.set_xalign(0)
+        content.pack_start(label, False, False, 0)
+        self.input_combo = Gtk.ComboBoxText()
+        self.input_combo.connect('changed', self.select_input)
+        content.pack_start(self.input_combo, False, False, 0)
+        self.input_port = Gtk.ComboBoxText()
+        self.input_port.connect('changed', self.select_input_port)
+        content.pack_start(self.input_port, False, False, 0)
+        self.mic_row = VolumeRow(self.args.max_volume, self.set_mic_volume, self.set_mic_mute)
+        content.pack_start(self.mic_row.root, False, False, 0)
+
+        css = Gtk.CssProvider()
+        css.load_from_data(b'scale.amplified highlight { background-color: #c87536; }')
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        # Realize the widget hierarchy once; the windows remain hidden until requested.
+        self.popup.show_all()
+        self.popup.hide()
+        self.mixer.show_all()
+        self.mixer.hide()
+
+    def call(self, func, *args):
+        try:
+            return func(*args)
+        except (pulsectl.PulseError, OSError) as exc:
+            LOG.warning('PulseAudio: %s', exc)
+            self.schedule_refresh()
+            return None
+
+    def _listen(self):
+        """Dedicated connection: pulsectl objects must not be shared across threads."""
+        while not self.closed.is_set():
+            try:
+                with pulsectl.Pulse('audiotray-events') as listener:
+                    listener.event_mask_set('all')
+                    listener.event_callback_set(lambda _: GLib.idle_add(self.schedule_refresh))
+                    while not self.closed.is_set():
+                        listener.event_listen(timeout=2)
+            except (pulsectl.PulseError, OSError) as exc:
+                LOG.warning('PulseAudio event connection: %s', exc)
+                time.sleep(2)
+
+    def schedule_refresh(self):
+        if not self.refresh_pending and not self.closed.is_set():
+            self.refresh_pending = True
+            GLib.timeout_add(90, self._refresh_once)
+        return False
+
+    def _refresh_once(self):
+        self.refresh_pending = False
+        self.refresh()
+        return False
+
+    def refresh(self):
+        try:
+            self.server = self.pulse.server_info()
+            self.sinks = {s.name: s for s in self.pulse.sink_list()}
+            self.sources = {s.name: s for s in self.pulse.source_list() if not s.name.endswith('.monitor')}
+            self.streams = {s.index: s for s in self.pulse.sink_input_list()}
+        except (pulsectl.PulseError, OSError) as exc:
+            LOG.warning('Could not update audio state: %s', exc)
+            self.tray.set_tooltip_text('PulseAudio indisponível')
+            return
+        self.sink = self.sinks.get(self.server.default_sink_name)
+        self.source = self.sources.get(self.server.default_source_name)
+        if self.sink:
+            vol = percentage(self.sink)
+            muted = bool(self.sink.mute)
+            name = friendly(self.sink)
+            self.tray.set_from_icon_name(self.volume_icon(vol, muted))
+            self.tray.set_tooltip_text(f'{name}: {vol}%'+ (' (mudo)' if muted else ''))
+            self.out_label.set_text(name)
+            self.value_label.set_text(f'{vol}%')
+            context = self.vertical.get_style_context()
+            (context.add_class if vol > 100 else context.remove_class)('amplified')
+            self.master_mute.set_image(Gtk.Image.new_from_icon_name(
+                self.volume_icon(vol, muted, symbolic=True), Gtk.IconSize.BUTTON))
+            if not self.master_dragging:
+                self.master_updating = True
+                self.vertical.set_value(min(vol, self.args.max_volume))
+                self.master_updating = False
+        else:
+            self.tray.set_from_icon_name('audio-volume-muted')
+            self.tray.set_tooltip_text('Nenhuma saída de áudio')
+            self.out_label.set_text('Sem saída')
+            self.value_label.set_text('—')
+        self.vertical.set_sensitive(bool(self.sink))
+        self.master_mute.set_sensitive(bool(self.sink))
+        self.mixer_master.update(self.sink)
+        if self.mixer.get_visible():
+            self.refresh_details()
+
+    @staticmethod
+    def volume_icon(vol, mute, symbolic=False):
+        if mute or vol <= 0:
+            icon = 'audio-volume-muted'
+        elif vol <= 33:
+            icon = 'audio-volume-low'
+        elif vol <= 66:
+            icon = 'audio-volume-medium'
+        else:
+            icon = 'audio-volume-high'
+        return icon + ('-symbolic' if symbolic else '')
+
+    def current_sink(self):
+        return self.sink
+
+    def current_source(self):
+        return self.source
+
+    def on_master_change(self, widget):
+        if getattr(self, 'master_updating', False):
+            return
+        sink = self.current_sink()
+        if sink:
+            self.call(self.pulse.volume_set_all_chans, sink, widget.get_value() / 100)
+            self.schedule_refresh()
+
+    def master_press(self, *_):
+        self.master_dragging = True
+        return False
+
+    def master_release(self, *_):
+        self.master_dragging = False
+        return False
+
+    def toggle_master_mute(self, *_):
+        if self.sink:
+            self.call(self.pulse.mute, self.sink, not self.sink.mute)
+            self.schedule_refresh()
+
+    def on_tray_click(self, _icon, event):
+        if event.button == 2:
+            self.toggle_master_mute()
+            return True
+        # Right click is handled by popup-menu; left click by activate.
+        return False
+
+    def on_scroll(self, _icon, event):
+        if not self.sink:
+            return False
+        change = self.args.volume_step / 100
+        if event.direction == Gdk.ScrollDirection.UP:
+            delta = change
+        elif event.direction == Gdk.ScrollDirection.DOWN:
+            delta = -change
+        elif event.direction == Gdk.ScrollDirection.SMOOTH:
+            _ok, dx, dy = event.get_scroll_deltas()
+            delta = -dy * change
+        else:
+            return False
+        new = max(0, min(self.args.max_volume / 100, self.sink.volume.value_flat + delta))
+        self.call(self.pulse.volume_set_all_chans, self.sink, new)
+        self.schedule_refresh()
+        return True
+
+    def toggle_popup(self):
+        if self.popup.get_visible():
+            self.popup.hide()
+            return
+        self.refresh()
+        self.position_popup()
+        self.popup.show_all()
+        # Geometry becomes final after mapping; compensate once, not after mixer changes.
+        GLib.idle_add(self.position_popup)
+        self.popup.present()
+
+    def position_popup(self):
+        if not self.tray.is_embedded():
+            return False
+        geom = self.tray.get_geometry()
+        if not geom or not geom[0]:
+            return False
+        # PyGObject GTK 3 returns (success, screen, rectangle, orientation).
+        # Some older bindings expose only (screen, rectangle, orientation).
+        if len(geom) == 4:
+            ok, screen, rect, _orientation = geom
+            if not ok:
+                return False
+        elif len(geom) == 3:
+            screen, rect, _orientation = geom
+        else:
+            return False
+        if screen is None or rect is None:
+            return False
+        monitor_id = screen.get_monitor_at_point(
+            rect.x + rect.width // 2, rect.y + rect.height // 2)
+        work = screen.get_monitor_workarea(monitor_id)
+        # Preferred size is available even when the popup is currently hidden.
+        _minimum, natural = self.popup.get_preferred_size()
+        width, height = max(1, natural.width), max(1, natural.height)
+        margin = 6
+        x = rect.x + (rect.width - width) // 2
+        if rect.y >= work.y + work.height // 2:
+            y = rect.y - height - margin
+        else:
+            y = rect.y + rect.height + margin
+        x = max(work.x + margin, min(x, work.x + work.width - width - margin))
+        y = max(work.y + margin, min(y, work.y + work.height - height - margin))
+        self.popup.move(x, y)
+        return False
+
+    def on_focus_out(self, *_):
+        # Only the small popup closes when it loses focus; the mixer is a
+        # normal, persistent window and is not affected.
+        GLib.timeout_add(120, self.hide_if_unfocused)
+        return False
+
+    def hide_if_unfocused(self):
+        if self.popup.get_visible() and not self.popup.is_active():
+            self.popup.hide()
+        return False
+
+    def on_key(self, _window, event):
+        if event.keyval == Gdk.KEY_Escape:
+            self.popup.hide()
+            return True
+        return False
+
+    def on_mixer_key(self, _window, event):
+        if event.keyval == Gdk.KEY_Escape:
+            self.mixer.hide()
+            return True
+        return False
+
+    def set_master_volume(self, value):
+        if self.sink:
+            self.call(self.pulse.volume_set_all_chans, self.sink, value)
+            self.schedule_refresh()
+
+    def set_master_mute(self, mute):
+        if self.sink:
+            self.call(self.pulse.mute, self.sink, mute)
+            self.schedule_refresh()
+
+    def update_combo(self, combo, items, selected):
+        old_items = getattr(combo, '_audio_items', None)
+        current_items = tuple((name, label) for name, label in items)
+        if old_items == current_items and combo.get_active_id() == selected:
+            return
+        self.combo_lock = True
+        try:
+            combo.remove_all()
+            for ident, label in items:
+                combo.append(ident, label)
+            combo.set_active_id(selected)
+            combo._audio_items = current_items
+            combo.set_sensitive(bool(items))
+            combo.set_visible(bool(items))
+        finally:
+            self.combo_lock = False
+
+    def refresh_details(self):
+        self.update_combo(self.output_combo,
+                          [(s.name, friendly(s)) for s in self.sinks.values()],
+                          self.sink.name if self.sink else None)
+        self.update_combo(self.input_combo,
+                          [(s.name, friendly(s)) for s in self.sources.values()],
+                          self.source.name if self.source else None)
+        self.update_ports(self.output_port, self.sink)
+        self.update_ports(self.input_port, self.source)
+        self.mic_row.update(self.source, is_mic=True)
+
+        existing = set(self.stream_rows)
+        incoming = set(self.streams)
+        for sid in existing - incoming:
+            self.stream_rows.pop(sid)['root'].destroy()
+        for sid in incoming - existing:
+            stream = self.streams[sid]
+            block = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+            header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            app_icon = Gtk.Image.new_from_icon_name('audio-x-generic', Gtk.IconSize.DND)
+            app_icon.set_pixel_size(24)
+            header.pack_start(app_icon, False, False, 0)
+            name = Gtk.Label(label=self.stream_name(stream))
+            name.set_xalign(0)
+            name.set_hexpand(True)
+            name.set_ellipsize(3)
+            header.pack_start(name, True, True, 0)
+            block.pack_start(header, False, False, 0)
+            row = VolumeRow(self.args.max_volume,
+                            lambda value, idx=sid: self.set_stream_volume(idx, value),
+                            lambda mute, idx=sid: self.set_stream_mute(idx, mute))
+            block.pack_start(row.root, False, False, 0)
+            route = Gtk.ComboBoxText()
+            route.connect('changed', lambda widget, idx=sid: self.route_stream(idx, widget))
+            block.pack_start(route, False, False, 0)
+            self.stream_box.pack_start(block, False, False, 0)
+            self.stream_rows[sid] = dict(root=block, name=name, icon=app_icon, row=row, route=route)
+            block.show_all()
+        for sid, stream in self.streams.items():
+            widgets = self.stream_rows[sid]
+            widgets['name'].set_text(self.stream_name(stream))
+            icon_name = self.stream_icon(stream)
+            if widgets.get('icon_name') != icon_name:
+                widgets['icon'].set_from_icon_name(icon_name, Gtk.IconSize.DND)
+                widgets['icon'].set_pixel_size(24)
+                widgets['icon_name'] = icon_name
+            widgets['row'].update(stream)
+            self.update_combo(widgets['route'],
+                              [(s.name, '→ ' + friendly(s)) for s in self.sinks.values()],
+                              next((s.name for s in self.sinks.values() if s.index == stream.sink), None))
+        if not self.streams:
+            if not hasattr(self, 'no_streams'):
+                self.no_streams = Gtk.Label(label='Nenhum aplicativo reproduzindo áudio')
+                self.no_streams.set_line_wrap(True)
+                self.stream_box.pack_start(self.no_streams, False, False, 0)
+            self.no_streams.show()
+        elif hasattr(self, 'no_streams'):
+            self.no_streams.hide()
+
+    @staticmethod
+    def stream_name(stream):
+        props = stream.proplist or {}
+        return props.get('application.name') or stream.name or 'Aplicativo'
+
+    @staticmethod
+    def stream_icon(stream):
+        """Resolve an app icon using PulseAudio metadata and the GTK icon theme."""
+        props = stream.proplist or {}
+        theme = Gtk.IconTheme.get_default()
+        candidates = (
+            props.get('application.icon_name'),
+            props.get('application.id'),
+            os.path.basename(props.get('application.process.binary') or ''),
+        )
+        for candidate in candidates:
+            if not candidate:
+                continue
+            # Flatpak IDs may use mixed case; theme names may be lower-case.
+            for name in (candidate, candidate.lower()):
+                if theme.has_icon(name):
+                    return name
+        return 'audio-x-generic'
+
+    def update_ports(self, combo, device):
+        ports = getattr(device, 'port_list', []) if device else []
+        active = getattr(getattr(device, 'port_active', None), 'name', None) if device else None
+        self.update_combo(combo, [(port.name, friendly(port)) for port in ports], active)
+        combo.set_visible(len(ports) > 1)
+
+    def select_output(self, combo):
+        if self.combo_lock:
+            return
+        sink = self.sinks.get(combo.get_active_id())
+        if sink:
+            self.call(self.pulse.default_set, sink)
+            self.schedule_refresh()
+
+    def select_input(self, combo):
+        if self.combo_lock:
+            return
+        source = self.sources.get(combo.get_active_id())
+        if source:
+            self.call(self.pulse.default_set, source)
+            self.schedule_refresh()
+
+    def select_output_port(self, combo):
+        if not self.combo_lock and self.sink and combo.get_active_id():
+            self.call(self.pulse.sink_port_set, self.sink, combo.get_active_id())
+            self.schedule_refresh()
+
+    def select_input_port(self, combo):
+        if not self.combo_lock and self.source and combo.get_active_id():
+            self.call(self.pulse.source_port_set, self.source, combo.get_active_id())
+            self.schedule_refresh()
+
+    def set_mic_volume(self, value):
+        if self.source:
+            self.call(self.pulse.volume_set_all_chans, self.source, value)
+            self.schedule_refresh()
+
+    def set_mic_mute(self, mute):
+        if self.source:
+            self.call(self.pulse.mute, self.source, mute)
+            self.schedule_refresh()
+
+    def set_stream_volume(self, sid, value):
+        stream = self.streams.get(sid)
+        if stream:
+            self.call(self.pulse.volume_set_all_chans, stream, value)
+            self.schedule_refresh()
+
+    def set_stream_mute(self, sid, mute):
+        stream = self.streams.get(sid)
+        if stream:
+            self.call(self.pulse.mute, stream, mute)
+            self.schedule_refresh()
+
+    def route_stream(self, sid, combo):
+        if self.combo_lock or not combo.get_active_id():
+            return
+        stream = self.streams.get(sid)
+        sink = self.sinks.get(combo.get_active_id())
+        if stream and sink and stream.sink != sink.index:
+            self.call(self.pulse.sink_input_move, stream.index, sink.index)
+            self.schedule_refresh()
+
+    def context_menu(self, _icon, button, timestamp):
+        menu = Gtk.Menu()
+        show = Gtk.MenuItem(label='Abrir mixer')
+        show.connect('activate', lambda *_: self.open_mixer())
+        menu.append(show)
+        quit_item = Gtk.MenuItem(label='Sair')
+        quit_item.connect('activate', self.quit)
+        menu.append(quit_item)
+        menu.show_all()
+        menu.popup(None, None, Gtk.StatusIcon.position_menu, self.tray, button, timestamp)
+
+    def open_mixer(self, *_):
+        self.popup.hide()
+        self.refresh()
+        if not self.mixer.get_visible():
+            self.mixer.show_all()
+        # Reapply visibility of single-port selectors after show_all().
+        self.refresh_details()
+        self.mixer.present()
+
+    def quit(self, *_):
+        self.closed.set()
+        self.popup.destroy()
+        self.mixer.destroy()
+        self.tray.set_visible(False)
+        self.pulse.close()
+        Gtk.main_quit()
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(description='GTK3 systray mixer for PulseAudio on X11')
+    ap.add_argument('--max-volume', type=int, default=150, help='Maximum volume percent (default 150)')
+    ap.add_argument('--volume-step', type=int, default=5, help='Mouse-wheel volume increment (default 5)')
+    ap.add_argument('--dark-mode', action='store_true', help='Prefer a dark GTK theme')
+    ap.add_argument('--light-mode', action='store_true', help='Prefer a light GTK theme')
+    args = ap.parse_args()
+    if not 100 <= args.max_volume <= 200:
+        ap.error('--max-volume must be 100..200')
+    if not 1 <= args.volume_step <= 50:
+        ap.error('--volume-step must be 1..50')
+    if args.dark_mode and args.light_mode:
+        ap.error('Choose one of --dark-mode / --light-mode')
+    return args
+
+
+def main():
+    logging.basicConfig(level=logging.WARNING, format='%(name)s: %(message)s')
+    args = parse_args()
+    Gtk.Settings.get_default().set_property('gtk-application-prefer-dark-theme', args.dark_mode if args.dark_mode or args.light_mode else False)
+    try:
+        app = AudioTray(args)
+    except (pulsectl.PulseError, OSError) as exc:
+        raise SystemExit(f'Cannot connect to PulseAudio: {exc}')
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()
