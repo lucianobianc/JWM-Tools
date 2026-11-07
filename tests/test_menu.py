@@ -200,3 +200,67 @@ class MenuTests(unittest.TestCase):
         self.assertEqual(count, len(COMMANDS))
         menu = utilities.find("Program[@label='jwm_menu']")
         self.assertEqual(menu.text, "jwm_menu")
+
+    def test_drag_across_documents_preserves_raw_xml_and_backups(self):
+        from jwm_tools.menu.model import transfer_nodes, save_documents
+
+        source = self.document(
+            '<JWM><Menu label="One"><Program extra=\'keep\' label="Item"> old <!--note--></Program></Menu></JWM>'
+        )
+        destination_path = self.path.with_name("destination")
+        destination_path.write_text('<JWM><Menu label="Two"/></JWM>')
+        destination = MenuDocument(destination_path)
+        original_source = self.path.read_bytes()
+        original_destination = destination_path.read_bytes()
+        node = source.roots()[0].children[0]
+        transfer_nodes([node], destination.roots()[0], 0, destination)
+        self.assertNotIn("<Program", source.preview())
+        self.assertIn(
+            "<Program extra='keep' label=\"Item\"> old <!--note--></Program>",
+            destination.preview(),
+        )
+        save_documents([source, destination])
+        self.assertNotIn("<Program", self.path.read_text())
+        self.assertIn("<!--note-->", destination_path.read_text())
+        self.assertEqual(self.path.with_name("jwmrc.bak").read_bytes(), original_source)
+        self.assertEqual(
+            destination_path.with_name("destination.bak").read_bytes(),
+            original_destination,
+        )
+
+    def test_drag_rejects_cycle_before_mutating_tree(self):
+        from jwm_tools.menu.model import transfer_nodes
+
+        doc = self.document(
+            '<JWM><Menu label="Parent"><Menu label="Child"/></Menu></JWM>'
+        )
+        parent = doc.roots()[0]
+        child = parent.children[0]
+        with self.assertRaises(ValueError):
+            transfer_nodes([parent], child, 0, doc)
+        self.assertFalse(doc.dirty)
+
+    def test_multi_file_save_rolls_back_on_second_file_failure(self):
+        from jwm_tools.menu import model
+
+        first = self.document('<JWM><Program label="One">one</Program></JWM>')
+        second_path = self.path.with_name("second")
+        second_path.write_text('<JWM><Program label="Two">two</Program></JWM>')
+        second = MenuDocument(second_path)
+        originals = {d.path: d.path.read_bytes() for d in (first, second)}
+        first.update(first.roots()[0], {"label": "Changed"}, "one")
+        second.update(second.roots()[0], {"label": "Changed"}, "two")
+        real_save = model.save_atomic
+
+        def fail(path, data):
+            if path == second_path:
+                raise OSError("disk full")
+            return real_save(path, data)
+
+        with patch("jwm_tools.menu.model.save_atomic", side_effect=fail):
+            with self.assertRaises(OSError):
+                model.save_documents([first, second])
+        for path, data in originals.items():
+            self.assertEqual(path.read_bytes(), data)
+        self.assertTrue(first.dirty)
+        self.assertTrue(second.dirty)

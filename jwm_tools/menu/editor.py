@@ -8,8 +8,16 @@ import xml.etree.ElementTree as ET
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GdkPixbuf, GLib, Gio
-from .model import MenuDocument, Node, KINDS, TEXT_KINDS
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Gio
+from .model import (
+    MenuDocument,
+    Node,
+    KINDS,
+    TEXT_KINDS,
+    save_documents,
+    topmost_nodes,
+    transfer_nodes,
+)
 from ..startup.editor import ApplicationDialog, StartupEditor
 from ..iconpicker import choose_icon
 
@@ -45,7 +53,14 @@ class EntryDialog(Gtk.Dialog):
         box.add(grid)
         self.kind = Gtk.ComboBoxText()
         for kind in ("RootMenu",) if node and node.kind == "RootMenu" else KINDS:
-            self.kind.append(kind, kind)
+            self.kind.append(
+                kind,
+                {
+                    "Program": "Application",
+                    "Menu": "Submenu",
+                    "RootMenu": "Root menu",
+                }.get(kind, kind),
+            )
         self.kind.set_active_id(node.kind if node else "Program")
         self.kind.set_sensitive(node is None)
         self.label = Gtk.Entry()
@@ -230,13 +245,13 @@ class EntryDialog(Gtk.Dialog):
 class MenuEditor(Gtk.Window):
     message = StartupEditor.message
     confirm = StartupEditor.confirm
-    can_discard = StartupEditor.can_discard
 
     def __init__(self, path):
         super().__init__(title="jwm_menu — Menu editor")
         self.document = MenuDocument(path)
+        self.documents = {self.document.path: self.document}
         self.origins = {}
-        self.history = []
+        self.drag_nodes = []
         self.tree_states = {}
         self.tree_document_path = None
         self.set_default_size(1080, 650)
@@ -255,13 +270,39 @@ class MenuEditor(Gtk.Window):
             button = Gtk.Button(label=label)
             button.connect("clicked", callback)
             header.add(button)
-        self.back_button = Gtk.Button(label="Back")
-        self.back_button.connect("clicked", self.go_back)
-        header.add(self.back_button)
         box.pack_start(header, False, False, 0)
         self.store = Gtk.TreeStore(object, GdkPixbuf.Pixbuf, str, str, str, str)
         self.tree = Gtk.TreeView(model=self.store)
         self.tree.set_tooltip_column(5)
+        self.tree.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+        self.tree.connect("key-press-event", self.tree_key)
+        targets = [
+            Gtk.TargetEntry.new(
+                "application/x-jwm-menu-entry", Gtk.TargetFlags.SAME_WIDGET, 0
+            )
+        ]
+        self.tree.enable_model_drag_source(
+            Gdk.ModifierType.BUTTON1_MASK, targets, Gdk.DragAction.MOVE
+        )
+        self.tree.enable_model_drag_dest(targets, Gdk.DragAction.MOVE)
+        self.tree.connect(
+            "drag-begin", lambda *_: setattr(self, "drag_nodes", self.selected_roots())
+        )
+        self.tree.connect(
+            "drag-data-get",
+            lambda _w, _c, data, _i, _t: data.set(
+                data.get_target(), 8, b"jwm-menu-entry"
+            ),
+        )
+        self.tree.connect("drag-motion", self.drag_motion)
+        self.tree.connect("drag-drop", self.drag_drop)
+        self.tree.connect(
+            "drag-leave",
+            lambda widget, *_: widget.set_drag_dest_row(
+                None, Gtk.TreeViewDropPosition.BEFORE
+            ),
+        )
+        self.tree.connect("drag-data-received", self.drop_received)
         column = Gtk.TreeViewColumn("Menu entry")
         icon = Gtk.CellRendererPixbuf()
         column.pack_start(icon, False)
@@ -283,6 +324,13 @@ class MenuEditor(Gtk.Window):
             column.set_fixed_width({3: 120, 4: 280, 5: 150}[index])
             column.set_expand(index == 4)
             column.set_min_width(100)
+            if index == 5:
+                column.set_cell_data_func(
+                    cell,
+                    lambda _column, renderer, model, it, _data: renderer.set_property(
+                        "text", Path(model[it][5]).name
+                    ),
+                )
             self.tree.append_column(column)
         self.tree.connect("row-activated", lambda *_: self.edit_selected())
         self.tree.get_selection().connect(
@@ -297,16 +345,17 @@ class MenuEditor(Gtk.Window):
         self.buttons = {}
         for label, callback in (
             ("Add entry", self.add_entry),
-            ("Add root menu", self.add_root),
             ("Edit", self.edit_selected),
             ("Delete", self.remove_selected),
             ("Move up", lambda *_: self.move(-1)),
             ("Move down", lambda *_: self.move(1)),
             ("Indent", self.indent),
             ("Outdent", self.outdent),
-            ("Open source file", self.open_include),
         ):
-            button = Gtk.Button(label=label)
+            mnemonic = {"Add entry": "_Add", "Edit": "_Edit", "Delete": "_Delete"}.get(
+                label, label
+            )
+            button = Gtk.Button.new_with_mnemonic(mnemonic)
             button.connect("clicked", callback)
             actions.add(button)
             self.buttons[label] = button
@@ -340,26 +389,152 @@ class MenuEditor(Gtk.Window):
             button.connect("clicked", callback)
             footer.pack_start(button, True, True, 0)
         box.pack_start(footer, False, False, 0)
+        self.tree.set_can_focus(True)
+        self.connect("key-press-event", self.window_key)
         self.connect("delete-event", lambda *_: not self.can_discard())
         self.refresh()
 
+    def selected_nodes(self):
+        model, paths = self.tree.get_selection().get_selected_rows()
+        return [model[path][0] for path in paths]
+
+    def selected_roots(self):
+        model, paths = self.tree.get_selection().get_selected_rows()
+        indices = [tuple(path.get_indices()) for path in paths]
+        return [
+            model[path][0]
+            for path, index in zip(paths, indices)
+            if not any(
+                len(other) < len(index) and index[: len(other)] == other
+                for other in indices
+            )
+        ]
+
     def selected(self):
-        model, it = self.tree.get_selection().get_selected()
-        return model[it][0] if it is not None else None
+        nodes = self.selected_nodes()
+        return nodes[0] if len(nodes) == 1 else None
+
+    def owner(self, node):
+        root = node
+        while root.parent is not None:
+            root = root.parent
+        return next(
+            document for document in self.documents.values() if document.root is root
+        )
+
+    def dirty_documents(self):
+        return [document for document in self.documents.values() if document.dirty]
+
+    def can_discard(self):
+        return not self.dirty_documents() or self.confirm(
+            "Discard unsaved changes in all edited menu files?"
+        )
+
+    def window_key(self, _widget, event):
+        focus = self.get_focus()
+        if isinstance(focus, (Gtk.Entry, Gtk.TextView)):
+            return False
+        return self.tree_key(self.tree, event)
+
+    def tree_key(self, _widget, event):
+        if event.state & (
+            Gdk.ModifierType.CONTROL_MASK
+            | Gdk.ModifierType.MOD1_MASK
+            | Gdk.ModifierType.SUPER_MASK
+        ):
+            return False
+        key = Gdk.keyval_to_lower(event.keyval)
+        action = {
+            Gdk.KEY_Delete: self.remove_selected,
+            Gdk.KEY_KP_Delete: self.remove_selected,
+            Gdk.KEY_d: self.remove_selected,
+            Gdk.KEY_a: self.add_entry,
+            Gdk.KEY_e: self.edit_selected,
+            Gdk.KEY_F2: self.edit_selected,
+        }.get(key)
+        if action is None:
+            return False
+        action()
+        return True
 
     def selection_changed(self):
-        node = self.selected()
+        nodes = self.selected_nodes()
+        node = nodes[0] if len(nodes) == 1 else None
         if not hasattr(self, "buttons"):
             return
-        foreign = node in self.origins if node else False
-        editable = bool(node and node.editable)
-        self.buttons["Edit"].set_sensitive(editable)
-        self.buttons["Delete"].set_sensitive(editable)
-        for label in ("Move up", "Move down", "Indent", "Outdent"):
-            self.buttons[label].set_sensitive(editable and not foreign)
-        self.buttons["Open source file"].set_sensitive(
-            bool(node and (foreign or self.document.include_path(node)))
+        self.buttons["Edit"].set_sensitive(bool(node and node.editable))
+        roots = self.selected_roots()
+        self.buttons["Delete"].set_sensitive(
+            bool(roots) and all(n.editable for n in roots)
         )
+        for label in ("Move up", "Move down", "Indent", "Outdent"):
+            self.buttons[label].set_sensitive(bool(node and node.editable))
+
+    def drag_motion(self, widget, context, x, y, timestamp):
+        hit = widget.get_dest_row_at_pos(x, y)
+        if hit:
+            widget.set_drag_dest_row(*hit)
+        Gdk.drag_status(context, Gdk.DragAction.MOVE, timestamp)
+        return True
+
+    def drag_drop(self, widget, context, _x, _y, timestamp):
+        target = widget.drag_dest_find_target(context, None)
+        if target:
+            widget.drag_get_data(context, target, timestamp)
+            return True
+        return False
+
+    def include_container(self, node):
+        path = self.owner(node).include_path(node)
+        document = self.documents.get(path)
+        if document is None:
+            raise ValueError("This Include cannot be edited as a static menu.")
+        roots = [n for n in document.roots() if n.kind == "RootMenu"]
+        if len(roots) > 1:
+            raise ValueError("Select the submenu inside this Include.")
+        return roots[0] if roots else document.root
+
+    def drop_received(self, widget, context, x, y, _data, _info, timestamp):
+        hit = widget.get_dest_row_at_pos(x, y)
+        success = False
+        try:
+            if not hit:
+                parent, after = self.destination()
+                index = (
+                    len(parent.children)
+                    if after is None
+                    else parent.children.index(after) + 1
+                )
+            else:
+                path, position = hit
+                target = self.store[path][0]
+                if position in (
+                    Gtk.TreeViewDropPosition.INTO_OR_BEFORE,
+                    Gtk.TreeViewDropPosition.INTO_OR_AFTER,
+                ) and target.kind in ("RootMenu", "Menu", "Include"):
+                    parent = (
+                        self.include_container(target)
+                        if target.kind == "Include"
+                        else target
+                    )
+                    index = len(parent.children)
+                else:
+                    parent = target.parent
+                    index = parent.children.index(target) + (
+                        position
+                        in (
+                            Gtk.TreeViewDropPosition.AFTER,
+                            Gtk.TreeViewDropPosition.INTO_OR_AFTER,
+                        )
+                    )
+            moved = transfer_nodes(self.drag_nodes, parent, index, self.owner(parent))
+            self.refresh(moved[0] if moved else None)
+            success = bool(moved)
+        except (ValueError, StopIteration) as exc:
+            self.message(str(exc))
+        finally:
+            Gtk.drag_finish(context, success, False, timestamp)
+            self.drag_nodes = []
 
     def refresh(self, selected=None, reset=False):
         def key(node, source):
@@ -378,14 +553,17 @@ class MenuEditor(Gtk.Window):
         self.tree_document_path = self.document.path
         self.store.clear()
         self.origins = {}
-        documents = {self.document.path: self.document}
+        documents = self.documents
         warnings = []
         expand_paths = []
         selected_paths = []
+        self.menu_roots = []
 
         def add(node, parent=None, document=None, stack=()):
             document = document or self.document
             foreign = document is not self.document
+            if node.kind == "RootMenu":
+                self.menu_roots.append(node)
             if foreign:
                 self.origins[node] = document.path
             label = (
@@ -442,7 +620,12 @@ class MenuEditor(Gtk.Window):
             self.tree.get_selection().select_path(path)
         self.file_label.set_text(str(self.document.path))
         self.file_label.set_tooltip_text(str(self.document.path))
-        status = "Unsaved changes" if self.document.dirty else "No pending changes"
+        dirty = self.dirty_documents()
+        status = (
+            f"Unsaved changes in {len(dirty)} {'file' if len(dirty) == 1 else 'files'}"
+            if dirty
+            else "No pending changes"
+        )
         if self.document.path.name == ".jwm-menu":
             status += (
                 " · Running the menu generator will replace manual edits to this file."
@@ -452,26 +635,29 @@ class MenuEditor(Gtk.Window):
         self.status.set_text(status)
         self.status.set_line_wrap(True)
         self.status.set_max_width_chars(105)
-        self.back_button.set_sensitive(bool(self.history))
         self.selection_changed()
 
     def destination(self):
         node = self.selected()
-        if node in self.origins:
-            raise ValueError(
-                "Open the source file before adding entries to this included menu."
-            )
+        if node and node.kind == "Include":
+            return self.include_container(node), None
         if node and node.kind in ("RootMenu", "Menu"):
             return node, None
         if node:
             return node.parent, node
-        roots = [n for n in self.document.roots() if n.kind == "RootMenu"]
+        roots = self.menu_roots
         return (roots[0] if roots else self.document.root), None
 
     def bulk_target(self):
         node = self.selected()
-        if node in self.origins or node and node.kind == "Include":
-            self.message("Open the source file to change this included menu.")
+        if node and node.kind == "Include":
+            path = self.owner(node).include_path(node)
+            if path and path in self.documents:
+                document = self.documents[path]
+                roots = [n for n in document.roots() if n.kind == "RootMenu"]
+                if len(roots) <= 1:
+                    return roots[0] if roots else document.root
+            self.message("This Include cannot be edited as a static menu.")
             return None
         if node:
             return node if node.kind in ("RootMenu", "Menu") else node.parent
@@ -493,10 +679,11 @@ class MenuEditor(Gtk.Window):
         target = self.bulk_target()
         if target is None:
             return
+        target_document = self.owner(target)
         children = (
-            list(target.children)
-            if target is not self.document.root
-            else list(self.document.roots())
+            list(target_document.roots())
+            if target is target_document.root
+            else list(target.children)
         )
         if not children:
             return
@@ -550,16 +737,16 @@ class MenuEditor(Gtk.Window):
                     (element.text or "") if element.tag in TEXT_KINDS else "",
                     parent=parent,
                 )
-                self.document.validate(node.kind, node.attrs, node.value)
+                self.owner(target).validate(node.kind, node.attrs, node.value)
                 node.children = [build(child, node) for child in element]
                 return node
 
             generated = [build(child, target) for child in tree]
             if mode == "add":
                 target.children.extend(generated)
-            elif target is self.document.root:
+            elif target is self.owner(target).root:
                 retained = [
-                    n for n in target.children if n not in self.document.roots()
+                    n for n in target.children if n not in self.owner(target).roots()
                 ]
                 target.children = retained + generated
             else:
@@ -575,11 +762,13 @@ class MenuEditor(Gtk.Window):
                 try:
                     kind, attrs, value = dialog.candidate()
                     if node:
-                        self.document.update(node, attrs, value)
+                        self.owner(node).update(node, attrs, value)
                         selected = node
                     else:
                         parent, after = self.destination()
-                        selected = self.document.add(parent, kind, attrs, value, after)
+                        selected = self.owner(parent).add(
+                            parent, kind, attrs, value, after
+                        )
                     self.refresh(selected)
                     break
                 except (ValueError, ET.ParseError) as exc:
@@ -588,7 +777,22 @@ class MenuEditor(Gtk.Window):
             dialog.destroy()
 
     def add_entry(self, *_):
-        self.edit_form()
+        needs_root = (
+            self.selected() is None
+            and not self.menu_roots
+            and (
+                self.document.path.name == ".jwmrc"
+                or any(n.kind not in KINDS for n in self.document.root.children)
+                or (
+                    not self.document.root.children
+                    and self.document.path.name != ".jwm-menu"
+                )
+            )
+        )
+        if needs_root:
+            self.add_root()
+        else:
+            self.edit_form()
 
     def add_root(self, *_):
         used = set(
@@ -600,6 +804,7 @@ class MenuEditor(Gtk.Window):
         )
         buttons = next((str(n) for n in range(1, 10) if str(n) not in used), "")
         dialog = EntryDialog(self, Node("RootMenu", {"onroot": buttons}))
+        dialog.set_title("Add root menu")
         try:
             while dialog.run() == Gtk.ResponseType.OK:
                 try:
@@ -615,82 +820,49 @@ class MenuEditor(Gtk.Window):
     def edit_selected(self, *_):
         node = self.selected()
         if node and node.editable:
-            if node in self.origins:
-                node = self.open_origin(node)
-            if node is not None:
-                self.edit_form(node)
+            self.edit_form(node)
 
     def remove_selected(self, *_):
-        node = self.selected()
-        if not node or not node.editable:
+        nodes = topmost_nodes(self.selected_roots())
+        if not nodes or any(not node.editable for node in nodes):
             return
-        if node in self.origins:
-            node = self.open_origin(node)
-        if node and self.confirm(
-            "Delete this entry and any submenu contents? Changes are written when you save."
-        ):
-            self.document.remove(node)
-            self.refresh()
+        for node in nodes:
+            self.owner(node).remove(node)
+        self.refresh()
 
     def move(self, step):
         node = self.selected()
-        if node and node not in self.origins and self.document.move(node, step):
+        if node and self.owner(node).move(node, step):
             self.refresh(node)
 
     def indent(self, *_):
         node = self.selected()
-        if node and node not in self.origins and self.document.indent(node):
+        if node and self.owner(node).indent(node):
             self.refresh(node)
 
     def outdent(self, *_):
         node = self.selected()
-        if node and node not in self.origins and self.document.outdent(node):
+        if node and self.owner(node).outdent(node):
             self.refresh(node)
 
-    def load(self, path, remember=True):
-        if not self.can_discard():
+    def load(self, path):
+        path = Path(path).expanduser().resolve()
+        same_file = path == self.document.path
+        if same_file and not self.can_discard():
             return False
         try:
-            document = MenuDocument(path)
+            if same_file:
+                document = MenuDocument(path)
+                self.documents = {path: document}
+            else:
+                document = self.documents.get(path) or MenuDocument(path)
+                self.documents[path] = document
         except (OSError, ValueError, ET.ParseError) as exc:
             self.message(str(exc))
-            return
-        if remember and document.path != self.document.path:
-            self.history.append(self.document.path)
-        same_file = document.path == self.document.path
+            return False
         self.document = document
         self.refresh(reset=same_file)
         return True
-
-    def go_back(self, *_):
-        if self.history:
-            path = self.history[-1]
-            if self.load(path, remember=False):
-                self.history.pop()
-                self.back_button.set_sensitive(bool(self.history))
-
-    def open_origin(self, node):
-        path = self.origins.get(node)
-        if path is None or not self.load(path):
-            return None
-        found = None
-
-        def find(candidate):
-            nonlocal found
-            if (
-                candidate.span
-                and node.span
-                and candidate.span[:2] == node.span[:2]
-                and candidate.kind == node.kind
-            ):
-                found = candidate
-            for child in candidate.children:
-                find(child)
-
-        find(self.document.root)
-        if found:
-            self.refresh(found)
-        return found
 
     def open_file(self, *_):
         chooser = Gtk.FileChooserDialog(
@@ -708,29 +880,24 @@ class MenuEditor(Gtk.Window):
         finally:
             chooser.destroy()
 
-    def open_include(self, *_):
-        node = self.selected()
-        if node in self.origins:
-            self.open_origin(node)
-            return
-        path = self.document.include_path(node) if node else None
-        if path:
-            self.load(path)
-
     def discard(self, *_):
         if self.can_discard():
             self.document = MenuDocument(self.document.path)
-            self.refresh()
+            self.documents = {self.document.path: self.document}
+            self.refresh(reset=True)
 
     def show_changes(self, *_):
         try:
             diff = "".join(
-                difflib.unified_diff(
-                    self.document.text.splitlines(keepends=True),
-                    self.document.preview().splitlines(keepends=True),
-                    fromfile="Original",
-                    tofile="Changed",
+                "".join(
+                    difflib.unified_diff(
+                        document.text.splitlines(keepends=True),
+                        document.preview().splitlines(keepends=True),
+                        fromfile=str(document.path),
+                        tofile=str(document.path) + " (changed)",
+                    )
                 )
+                for document in self.dirty_documents()
             )
         except (ValueError, ET.ParseError) as exc:
             self.message(str(exc))
@@ -749,7 +916,7 @@ class MenuEditor(Gtk.Window):
 
     def save(self, *_):
         try:
-            self.document.save()
+            save_documents(list(self.documents.values()))
         except (OSError, ValueError, ET.ParseError) as exc:
             self.message(str(exc))
             return False

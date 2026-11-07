@@ -44,6 +44,7 @@ class Node:
     original_attrs: dict = field(default_factory=dict)
     original_value: str = ""
     original_children: list = field(default_factory=list)
+    source_text: str | None = None
 
     @property
     def label(self):
@@ -82,6 +83,7 @@ class MenuDocument:
                 (elem.text or "").strip(),
                 parent=parent,
                 span=next(spans[elem.tag]),
+                source_text=self.text,
             )
             node.original_attrs = dict(node.attrs)
             node.original_value = node.value
@@ -213,7 +215,7 @@ class MenuDocument:
                 )
             return raw
         a, b, cs, ce, _ = node.span
-        raw = self.text[a:b]
+        raw = (node.source_text if node.source_text is not None else self.text)[a:b]
         if node.kind in CONTAINERS:
             rendered = [self.render(child) for child in node.children]
             edits = []
@@ -280,12 +282,89 @@ class MenuDocument:
         return Path(os.path.expandvars(os.path.expanduser(node.value))).resolve()
 
     def save(self):
-        current = self.path.read_bytes() if self.path.exists() else None
-        if current != self.original:
-            raise ValueError("The file changed on disk. Reload before saving.")
-        data = self.preview().encode("utf-8")
-        if data != self.original:
-            if self.original is not None:
-                save_atomic(self.path.with_name(self.path.name + ".bak"), self.original)
-            save_atomic(self.path, data)
-        self.__init__(self.path)
+        save_documents([self])
+
+
+def save_documents(documents):
+    """Preflight every edited file; roll back earlier writes on failure."""
+    planned = []
+    for document in documents:
+        current = document.path.read_bytes() if document.path.exists() else None
+        if current != document.original:
+            raise ValueError(
+                f"The file changed on disk. Reload before saving: {document.path}"
+            )
+        data = document.preview().encode("utf-8")
+        if data != document.original:
+            planned.append((document, data))
+    for document, _data in planned:
+        if document.original is not None:
+            save_atomic(
+                document.path.with_name(document.path.name + ".bak"), document.original
+            )
+    for document, _data in planned:
+        current = document.path.read_bytes() if document.path.exists() else None
+        if current != document.original:
+            raise ValueError(f"The file changed while preparing save: {document.path}")
+    written = []
+    try:
+        for document, data in planned:
+            save_atomic(document.path, data)
+            written.append(document)
+    except OSError as exc:
+        failures = []
+        for document in reversed(written):
+            try:
+                if document.original is None:
+                    document.path.unlink()
+                else:
+                    save_atomic(document.path, document.original)
+            except OSError as rollback:
+                failures.append(f"{document.path}: {rollback}")
+        if failures:
+            raise OSError(
+                str(exc) + "\nCould not restore: " + "; ".join(failures)
+            ) from exc
+        raise
+    for document, _data in planned:
+        document.__init__(document.path)
+
+
+def topmost_nodes(nodes):
+    selected = set(nodes)
+    result = []
+    seen = set()
+    for node in nodes:
+        if node in seen:
+            continue
+        seen.add(node)
+        parent = node.parent
+        while parent is not None and parent not in selected:
+            parent = parent.parent
+        if parent is None:
+            result.append(node)
+    return result
+
+
+def transfer_nodes(nodes, parent, index, destination):
+    """Move selected siblings/subtrees, including between loaded source files."""
+    nodes = topmost_nodes(nodes)
+    for node in nodes:
+        if not node.editable:
+            raise ValueError("This element is preserved but cannot be moved.")
+        destination.require_container(parent, node.kind)
+        ancestor = parent
+        while ancestor is not None:
+            if ancestor is node:
+                raise ValueError(
+                    "A submenu cannot be moved into itself or its children."
+                )
+            ancestor = ancestor.parent
+    before = sum(n.parent is parent and parent.children.index(n) < index for n in nodes)
+    for node in nodes:
+        node.parent.children.remove(node)
+    index = max(0, min(index - before, len(parent.children)))
+    for offset, node in enumerate(nodes):
+        parent.children.insert(index + offset, node)
+        node.parent = parent
+    return nodes

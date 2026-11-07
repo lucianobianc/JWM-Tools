@@ -29,8 +29,11 @@ class MenuUITests(unittest.TestCase):
         self.addCleanup(self.window.destroy)
 
     def select(self, node):
+        self.window.tree.get_selection().unselect_all()
+
         def visit(model, path, it, _):
             if model[it][0] is node:
+                self.window.tree.expand_to_path(path)
                 self.window.tree.get_selection().select_path(path)
                 return True
 
@@ -106,18 +109,18 @@ class MenuUITests(unittest.TestCase):
         finally:
             dialog.destroy()
 
-    def test_include_button_and_open_source(self):
+    def test_include_entries_are_editable_without_navigation_buttons(self):
         root = self.window.document.roots()[0]
-        self.select(root.children[2])
-        self.assertFalse(self.window.buttons["Open source file"].get_sensitive())
         included = Path(self.temp.name) / "menu"
         included.write_text('<JWM><Program label="Included">true</Program></JWM>')
         self.window.document.update(root.children[2], {}, str(included))
-        self.window.refresh(root.children[2])
-        self.assertTrue(self.window.buttons["Open source file"].get_sensitive())
-        with patch.object(self.window, "confirm", return_value=True):
-            self.window.open_include()
-        self.assertEqual(self.window.document.path, included)
+        self.window.refresh()
+        node = next(iter(self.window.origins))
+        self.select(node)
+        self.assertTrue(self.window.buttons["Edit"].get_sensitive())
+        self.assertNotIn("Open source file", self.window.buttons)
+        self.assertFalse(hasattr(self.window, "back_button"))
+        self.assertNotIn("Add root menu", self.window.buttons)
 
     def test_external_change_save_error_and_discard_protection(self):
         root = self.window.document.roots()[0]
@@ -229,7 +232,7 @@ class MenuUITests(unittest.TestCase):
         self.assertTrue(self.window.save())
         self.assertIn("exec:false", self.path.read_text())
 
-    def test_static_include_entries_edit_their_source_then_back(self):
+    def test_static_include_entries_edit_their_source_in_place(self):
         included = Path(self.temp.name) / "included-menu"
         included.write_text(
             '<JWM><Menu label="Included"><Program label="Original">true</Program></Menu></JWM>'
@@ -246,12 +249,13 @@ class MenuUITests(unittest.TestCase):
         with patch.object(self.window, "edit_form") as form:
             self.window.edit_selected()
             local = form.call_args.args[0]
-        self.assertEqual(self.window.document.path, included)
+        self.assertEqual(self.window.document.path, self.path)
         self.assertIs(self.window.selected(), local)
-        self.window.document.update(local, {**local.attrs, "label": "Changed"}, "false")
+        self.window.owner(local).update(
+            local, {**local.attrs, "label": "Changed"}, "false"
+        )
         self.assertTrue(self.window.save())
         self.assertEqual(self.path.read_bytes(), original)
-        self.window.go_back()
         self.assertEqual(self.window.document.path, self.path)
         self.assertTrue(
             any(node.attrs.get("label") == "Changed" for node in self.window.origins)
@@ -340,9 +344,10 @@ class MenuUITests(unittest.TestCase):
         node = next(n for n in self.window.origins if n.attrs.get("label") == "Remove")
         self.select(node)
         self.assertTrue(self.window.buttons["Delete"].get_sensitive())
-        with patch.object(self.window, "confirm", return_value=True):
+        with patch.object(self.window, "confirm") as confirm:
             self.window.buttons["Delete"].clicked()
-        self.assertEqual(self.window.document.path, included)
+            confirm.assert_not_called()
+        self.assertEqual(self.window.document.path, self.path)
         self.assertEqual(included.read_bytes(), before)
         self.assertTrue(self.window.save())
         self.assertNotIn("Remove", included.read_text())
@@ -351,3 +356,240 @@ class MenuUITests(unittest.TestCase):
         self.assertEqual(
             included.with_name(included.name + ".bak").read_bytes(), before
         )
+
+    def select_many(self, nodes):
+        self.window.tree.get_selection().unselect_all()
+
+        def visit(model, path, it, _):
+            if model[it][0] in nodes:
+                self.window.tree.expand_to_path(path)
+                self.window.tree.get_selection().select_path(path)
+
+        self.window.store.foreach(visit, None)
+
+    def test_multi_delete_is_pending_and_never_asks_confirmation(self):
+        root = self.window.document.roots()[0]
+        nested = self.window.document.add(
+            root.children[0], "Program", {"label": "Nested"}, "true"
+        )
+        self.window.refresh()
+        self.select_many([root.children[0], nested, root.children[1]])
+        with patch.object(self.window, "confirm") as confirm:
+            self.window.remove_selected()
+            confirm.assert_not_called()
+        self.assertEqual([n.kind for n in root.children], ["Include"])
+        self.assertEqual(self.path.read_text(), self.xml)
+        self.assertTrue(self.window.save())
+        self.assertNotIn("Nested", self.path.read_text())
+        self.assertNotIn("xterm", self.path.read_text())
+
+    def test_delete_multiple_source_files_in_place_and_save_both(self):
+        included = Path(self.temp.name) / "multi-source"
+        included.write_text('<JWM><Program label="Included">true</Program></JWM>')
+        root = self.window.document.roots()[0]
+        self.window.document.update(root.children[2], {}, str(included))
+        self.window.save()
+        original = self.path.read_bytes()
+        root = self.window.document.roots()[0]
+        foreign = next(n for n in self.window.origins if n.kind == "Program")
+        self.select_many([root.children[1], foreign])
+        self.window.buttons["Delete"].clicked()
+        self.assertEqual(self.window.document.path, self.path)
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertIn("Included", included.read_text())
+        self.assertEqual(len(self.window.dirty_documents()), 2)
+        self.assertTrue(self.window.save())
+        self.assertNotIn("xterm", self.path.read_text())
+        self.assertNotIn("Included", included.read_text())
+
+    def test_drag_into_submenu_updates_model_and_keeps_selection(self):
+        root = self.window.document.roots()[0]
+        program = root.children[1]
+        self.window.drag_nodes = [program]
+        context = MagicMock()
+        with patch.object(
+            self.window.tree,
+            "get_dest_row_at_pos",
+            return_value=(
+                Gtk.TreePath.new_from_string("0:0"),
+                Gtk.TreeViewDropPosition.INTO_OR_AFTER,
+            ),
+        ), patch("jwm_tools.menu.editor.Gtk.drag_finish") as finish:
+            self.window.drop_received(self.window.tree, context, 0, 0, None, 0, 1)
+            finish.assert_called_once_with(context, True, False, 1)
+        self.assertIs(program.parent, root.children[0])
+        self.assertIs(self.window.selected(), program)
+        self.assertEqual(self.path.read_text(), self.xml)
+        self.assertTrue(self.window.save())
+        self.assertEqual(
+            self.window.document.roots()[0].children[0].children[0].value, "xterm"
+        )
+
+    def test_drag_to_included_submenu_preserves_commands_and_writes_both(self):
+        included = Path(self.temp.name) / "drag-destination"
+        included.write_text('<JWM><Menu label="Included"/></JWM>')
+        root = self.window.document.roots()[0]
+        self.window.document.update(root.children[2], {}, str(included))
+        self.window.save()
+        root = self.window.document.roots()[0]
+        self.window.drag_nodes = [root.children[1]]
+        context = MagicMock()
+        with patch.object(
+            self.window.tree,
+            "get_dest_row_at_pos",
+            return_value=(
+                Gtk.TreePath.new_from_string("0:2:0"),
+                Gtk.TreeViewDropPosition.INTO_OR_AFTER,
+            ),
+        ), patch("jwm_tools.menu.editor.Gtk.drag_finish") as finish:
+            self.window.drop_received(self.window.tree, context, 0, 0, None, 0, 1)
+            finish.assert_called_once_with(context, True, False, 1)
+        self.assertEqual(len(self.window.dirty_documents()), 2)
+        self.assertTrue(self.window.save())
+        self.assertNotIn("xterm", self.path.read_text())
+        self.assertIn("xterm", included.read_text())
+
+    def test_shortcuts_and_mnemonics(self):
+        from types import SimpleNamespace
+        from gi.repository import Gdk
+
+        for key, method in (
+            (Gdk.KEY_a, "add_entry"),
+            (Gdk.KEY_e, "edit_selected"),
+            (Gdk.KEY_F2, "edit_selected"),
+            (Gdk.KEY_d, "remove_selected"),
+            (Gdk.KEY_Delete, "remove_selected"),
+        ):
+            with patch.object(self.window, method) as action:
+                self.assertTrue(
+                    self.window.tree_key(
+                        self.window.tree, SimpleNamespace(keyval=key, state=0)
+                    )
+                )
+                action.assert_called_once()
+                self.assertFalse(
+                    self.window.tree_key(
+                        self.window.tree,
+                        SimpleNamespace(
+                            keyval=key, state=Gdk.ModifierType.CONTROL_MASK
+                        ),
+                    )
+                )
+        self.assertTrue(self.window.buttons["Add entry"].get_use_underline())
+        self.assertEqual(self.window.buttons["Add entry"].get_label(), "_Add")
+
+    def test_add_creates_root_when_main_configuration_has_none(self):
+        path = self.path.with_name(".jwmrc")
+        path.write_text("<JWM><Tray/></JWM>")
+        self.window.load(path)
+        with patch.object(self.window, "add_root") as add_root, patch.object(
+            self.window, "edit_form"
+        ) as form:
+            self.window.add_entry()
+            add_root.assert_called_once()
+            form.assert_not_called()
+        self.assertNotIn("Add root menu", self.window.buttons)
+
+    @unittest.skipUnless(
+        os.environ.get("JWM_REAL_TESTS") == "1",
+        "Set JWM_REAL_TESTS=1 for real X11 input",
+    )
+    def test_real_mouse_drag_moves_entry_into_submenu(self):
+        import ctypes as C
+        import ctypes.util
+        import time
+
+        x = C.CDLL(C.util.find_library("X11"))
+        xt = C.CDLL(C.util.find_library("Xtst"))
+        x.XOpenDisplay.argtypes = [C.c_char_p]
+        x.XOpenDisplay.restype = C.c_void_p
+        x.XFlush.argtypes = [C.c_void_p]
+        x.XCloseDisplay.argtypes = [C.c_void_p]
+        xt.XTestFakeMotionEvent.argtypes = [
+            C.c_void_p,
+            C.c_int,
+            C.c_int,
+            C.c_int,
+            C.c_ulong,
+        ]
+        xt.XTestFakeButtonEvent.argtypes = [C.c_void_p, C.c_uint, C.c_int, C.c_ulong]
+        display = x.XOpenDisplay(None)
+        self.assertTrue(display)
+
+        def pump(count=5):
+            for _ in range(count):
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+                time.sleep(0.01)
+
+        self.window.present()
+        pump()
+        root = self.window.document.roots()[0]
+        node = root.children[1]
+        target = root.children[0]
+        origin = self.window.tree.get_bin_window().get_origin()
+        a = self.window.tree.get_background_area(
+            Gtk.TreePath.new_from_string("0:1"), None
+        )
+        b = self.window.tree.get_background_area(
+            Gtk.TreePath.new_from_string("0:0"), None
+        )
+        sx, sy = origin[-2] + 150, origin[-1] + a.y + a.height // 2
+        tx, ty = origin[-2] + 150, origin[-1] + b.y + b.height // 2
+
+        def motion(px, py):
+            xt.XTestFakeMotionEvent(display, -1, px, py, 0)
+            x.XFlush(display)
+            pump(3)
+
+        try:
+            motion(sx, sy)
+            xt.XTestFakeButtonEvent(display, 1, True, 0)
+            x.XFlush(display)
+            pump(3)
+            for i in range(1, 11):
+                motion(sx + 30 * i // 10, sy + (ty - sy) * i // 10)
+            motion(tx, ty)
+            pump(10)
+            xt.XTestFakeButtonEvent(display, 1, False, 0)
+            x.XFlush(display)
+            pump(20)
+            self.assertIs(node.parent, target)
+            self.assertEqual(self.path.read_text(), self.xml)
+        finally:
+            xt.XTestFakeButtonEvent(display, 1, False, 0)
+            x.XFlush(display)
+            x.XCloseDisplay(display)
+
+    def test_delete_include_and_preview_child_only_removes_reference(self):
+        included = Path(self.temp.name) / "preserve-source"
+        included.write_text('<JWM><Program label="Keep">true</Program></JWM>')
+        original = included.read_bytes()
+        root = self.window.document.roots()[0]
+        self.window.document.update(root.children[2], {}, str(included))
+        self.window.refresh()
+        foreign = next(iter(self.window.origins))
+        self.select_many([root.children[2], foreign])
+        self.window.remove_selected()
+        self.assertTrue(self.window.save())
+        self.assertEqual(included.read_bytes(), original)
+        self.assertNotIn(str(included), self.path.read_text())
+
+    def test_add_uses_root_menu_from_an_include(self):
+        included = Path(self.temp.name) / "root-menu-source"
+        included.write_text(
+            '<JWM><RootMenu onroot="12"><Program label="Existing">true</Program></RootMenu></JWM>'
+        )
+        path = self.path.with_name(".jwmrc")
+        path.write_text(f"<JWM><Include>{included}</Include></JWM>")
+        self.window.load(path)
+        with patch.object(self.window, "edit_form") as form, patch.object(
+            self.window, "add_root"
+        ) as add_root:
+            self.window.add_entry()
+            form.assert_called_once()
+            add_root.assert_not_called()
+        parent, after = self.window.destination()
+        self.assertEqual(parent.kind, "RootMenu")
+        self.assertEqual(self.window.owner(parent).path, included)
+        self.assertIsNone(after)

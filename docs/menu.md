@@ -1,83 +1,77 @@
 # jwm_menu
 
 ```sh
-jwm_menu                        # graphical editor
-jwm_menu ~/.jwmrc               # edit a specific configuration
-jwm_menu ~/.jwm-menu            # edit a menu fragment
-jwm_menu --generate             # rebuild ~/.jwm-menu from installed applications
+jwm_menu                    # opens ~/.jwmrc, or ~/.jwm-menu if absent
+jwm_menu /path/to/menu       # opens a configuration or menu fragment
+jwm_menu --generate          # rebuilds ~/.jwm-menu without opening the GUI
 ```
-
-The editor opens `~/.jwmrc` by default, falling back to `~/.jwm-menu` if no main
-configuration exists. New files are only created when saved. The desktop launcher
-opens the editor. Running `jwm_menu` without options opens the editor. `--edit` remains an alias.
-
-**Generate from applications** asks whether to **Add to current menu** or
-**Replace menu contents**. Add keeps existing entries, submenus and Includes,
-and appends installed applications grouped by category. Replace rebuilds the
-selected menu. Cancel leaves it unchanged. **Clear menu** removes its entries and submenus.
-Select a submenu to limit either action to it. Generation and clearing ask for confirmation
-and remain pending until **Save**; **Discard** restores the loaded file. Included
-files and unrelated JWM configuration are never cleared.
 
 ## Editing
 
-Select a menu and use **Add entry** to add an application, submenu, separator,
-Include or JWM action. Selecting a leaf adds the new entry after it. **Installed
-application…** fills in its name, command and icon. **Choose file…** next to
-**Path** opens a file chooser. Program paths are quoted for the shell;
-Include paths are inserted directly. Commands use shell syntax without an `exec:`
-prefix.
+**Add** creates an application, submenu, separator, Include or JWM action. If the
+main configuration has no root menu, Add creates that first. Included menu
+fragments accept entries directly. Selecting a submenu adds inside it; selecting
+an entry adds after it.
 
-Use **Choose icon…** to browse the installed theme in a visual grid, search by
-name and filter by category. **Load more** shows further matches. Symbolic icons
-are optional. **Choose image file…** selects a custom image; **Remove icon** clears
-it. The same picker is available for the Start button in `jwm_style`.
+**Installed application…** fills in the name, command and icon. **Choose file…**
+next to **Path** selects a program, script or Include file. Program paths are
+quoted for the shell; Include paths are inserted directly. Commands use shell
+syntax without an `exec:` prefix.
 
-Selections store the resolved image file path so JWM can find the icon without
-extra `IconPath` configuration. Files remain at those paths and are not copied;
-removing a theme package may therefore remove an icon used by the menu. You can
-also enter an icon name or image path manually. The tree displays available icons.
+**Choose icon…** browses installed theme icons with search, category filters and
+previews. It also accepts image files and can remove an icon. Selected icons are
+stored as image file paths; files are not copied. The same picker is available
+for the Start button in `jwm_style`.
 
-**Move up / Move down** change sibling order. Collapsed submenus stay collapsed when other entries are
-added or edited. **Indent** puts an entry inside the
-preceding submenu. **Outdent** moves it after its containing submenu. JWM menus
-follow top-to-bottom order. **Add root menu** creates a separate `RootMenu`, whose
-**Root buttons** field selects its desktop mouse buttons.
+## Selection and movement
 
-**View changes** shows the XML diff. **Save** creates a `<filename>.bak` backup and
-writes atomically; **Save and restart JWM** also requests a restart. **Discard**
-reloads the file after confirmation. Commands are never launched by the editor.
+Use Ctrl-click or Shift-click to select multiple entries. **Delete** removes the
+selection without a confirmation dialog. Selecting a submenu and its children
+removes that subtree once. Deleting an Include reference does not delete its
+source file or implicitly remove entries inside that file.
 
-Unknown attributes, comments and unrelated configuration are preserved. Unknown
-elements appear read-only inside menus. Mixed-content action text must be edited
-in the source file if it cannot be safely patched. External edits require reload
-before saving.
+Drag entries onto a submenu to move them inside it, or between rows to reorder.
+Moves between included files remain pending in their respective source files.
+A submenu cannot be moved into itself or one of its descendants. **Move up**,
+**Move down**, **Indent** and **Outdent** remain available for a single entry.
+Collapsed submenus stay collapsed when editing elsewhere.
 
-## Includes and generated menus
+| Shortcut | Action |
+| --- | --- |
+| A or Alt+A | Add |
+| E, Alt+E or F2 | Edit |
+| Delete, D or Alt+D | Delete selected entries |
 
-Static Includes expand in the tree, including nested Includes. **Source file**
-shows where each entry is defined. **Edit** or **Delete** on an included entry opens its source
-file and selects that entry. Deletion asks for confirmation and remains pending
-until that file is saved. Save there, then use **Back** to return
-to the parent menu. **Open source file** also navigates to the defining file.
-Moving included entries requires opening that file first.
+Letter shortcuts apply in the menu editor, not in text fields. Underlined button
+letters indicate Alt shortcuts; GTK may show the underline when Alt is pressed.
 
-Relative paths follow JWM's working directory. Missing files, Include cycles and
-depth limits are reported without changing the configuration. Dynamic Includes and
-`Dynamic` menu commands are preserved without execution; their generated contents
-are not expanded in the editor.
+## Saving
 
-Generation replaces `~/.jwm-menu` with the installed application list and creates
-a backup. If you run the generator at session startup, keep your custom entries
-in `~/.jwmrc` or a different included file to avoid replacing manual edits.
+All edits, deletions and moves remain pending until **Save**. **View changes**
+shows the XML diff for every modified file. Saving checks all loaded source files
+for external changes and creates `<filename>.bak` backups before writing. If a
+write fails, earlier writes are rolled back when possible. **Save and restart
+JWM** also requests a restart. **Discard** restores all loaded files after
+confirmation.
 
-To use a standalone menu fragment:
+Comments, unknown attributes and unrelated configuration are preserved. Unknown
+elements appear read-only. Mixed-content action text may require editing in the
+source file. The editor does not launch menu commands.
 
-```xml
-<RootMenu onroot="12">
-    <Include>~/.jwm-menu</Include>
-</RootMenu>
-```
+## Includes and generation
 
-If an older session command invokes `jwm_menu` for automatic generation, change it
-to `jwm_menu --generate`. The command without options now opens the GUI.
+Static Includes expand in the same tree, including nested Includes. **Source
+file** identifies where each entry is stored. Edit, add, delete or drag included
+entries directly; Save writes their source files without navigating away.
+Relative paths follow JWM's working directory. Missing files and Include cycles
+are reported. Dynamic Includes and `Dynamic` commands are preserved without
+execution, so their generated contents are not expanded.
+
+**Generate from applications** asks whether to add to the selected menu or replace
+its contents. Add keeps current entries and Includes; Replace rebuilds the
+selected menu. **Clear menu** removes that menu's entries after confirmation.
+These actions remain pending until saved.
+
+The CLI generator replaces `~/.jwm-menu` and backs it up. If it runs automatically,
+keep custom entries in another included file. Older startup commands that invoked
+`jwm_menu` for generation must use `jwm_menu --generate`.
