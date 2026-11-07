@@ -14,6 +14,8 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 from .themes import STYLES
 
+DECORATED_STYLES = ("WindowStyle", "TrayStyle", "TaskListStyle", "MenuStyle")
+
 # Ignore XML constructs that may contain tag-shaped text, preserving offsets.
 SPECIAL = re.compile(r"<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>", re.S)
 TAG = re.compile(
@@ -117,19 +119,21 @@ def replace_leaf(text, parent, child, value):
     return text[:cj] + safe + text[cj:]
 
 
-def update_decorations(text, value):
-    """Patch only the WindowStyle decorations attribute, keeping other bytes."""
+def update_decorations(text, value, section="WindowStyle"):
+    """Patch only a supported style decorations attribute, keeping other bytes."""
+    if section not in DECORATED_STYLES:
+        raise ValueError("This style does not support decorations.")
     if value not in ("motif", "flat"):
         raise ValueError("Decorations must be motif or flat.")
     root = _direct(text, "JWM")
     if len(root) != 1:
         raise ValueError("Expected a JWM root")
     rs, re_ = root[0][2:4]
-    sections = _direct(text[rs:re_], "WindowStyle")
+    sections = _direct(text[rs:re_], section)
     if not sections:
-        return update_decorations(_append(text, root[0], "WindowStyle", ""), value)
+        return update_decorations(_append(text, root[0], section, ""), value, section)
     if len(sections) != 1:
-        raise ValueError("Multiple WindowStyle blocks; cannot choose one safely.")
+        raise ValueError(f"Multiple {section} blocks; cannot choose one safely.")
     a, _, cs, _, _ = sections[0]
     a += rs
     cs += rs
@@ -146,8 +150,8 @@ def update_decorations(text, value):
 
 
 def update_style(text, section, property_path, value):
-    if section == "WindowStyle" and property_path == ("@decorations",):
-        return update_decorations(text, value)
+    if property_path == ("@decorations",):
+        return update_decorations(text, value, section)
     if section not in STYLES or len(property_path) not in (1, 2):
         raise ValueError("Unknown style property")
     if not all(re.fullmatch(r"[A-Za-z_][\w.-]*", p) for p in property_path):
@@ -194,7 +198,7 @@ def property_values(text):
         if node.tag not in STYLES:
             continue
         values = result.setdefault(node.tag, {})
-        if node.tag == "WindowStyle" and node.get("decorations") is not None:
+        if node.tag in DECORATED_STYLES and node.get("decorations") is not None:
             values["@decorations"] = node.get("decorations")
         for child in node:
             if child.tag in ("Active", "Minimized"):

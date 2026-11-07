@@ -2,7 +2,7 @@
 
 Tools that make it easier to use and configure JWM.
 
-## JWM Style Editor 0.7
+## JWM Style Editor 0.8
 
 A Python/GTK 3 editor with 34 built-in palettes, custom styles, and a live Cairo
 preview. The property panel and preview resize independently. Font fields use a native GTK font chooser. WindowStyle offers a Motif/Flat
@@ -75,6 +75,16 @@ application-provided window icons are samples. It does not simulate all JWM
 Native button glyphs are pixel-compared against a real JWM; the entire desktop
 is not claimed to be a pixel-identical screenshot.
 
+### Theme references and contrast
+
+Built-in presets now assign colors separately to titles, panels, menus and
+selection. Heritage follows the named Windows XP, IRIX, VUE, CDE and OS/2
+references; Hacker keeps dark surfaces with restrained luminous accents.
+Generated text pairs target at least 4.5:1 contrast. Hover over the preset
+selector to see its reference. See [the palette review](docs/themes.md) for
+sources, component roles and fidelity limits. Existing custom styles are not
+rewritten when opening the editor.
+
 ### Tests
 
 The test suite uses the standard library's `unittest`. Core XML and theme tests
@@ -116,7 +126,7 @@ declared in the package; the other tools remain available in the source checkout
 The package does not change your `~/.jwmrc` or start a background service.
 
 ```sh
-sudo apt install ./jwm-style-editor_0.7-1_all.deb
+sudo apt install ./jwm-style-editor_0.8-1_all.deb
 jwm-style-editor --version
 ```
 
@@ -131,4 +141,4 @@ sha256sum -c SHA256SUMS
 The build needs Python 3 and `dpkg-deb`. It includes no vendored dependencies or
 local configuration. Set `SOURCE_DATE_EPOCH` to reproduce artifact timestamps;
 by default it uses the latest Git commit timestamp. Release assets are
-`jwm-style-editor-0.7.tar.gz`, `jwm-style-editor_0.7-1_all.deb`, and `SHA256SUMS`.
+`jwm-style-editor-0.8.tar.gz`, `jwm-style-editor_0.8-1_all.deb`, and `SHA256SUMS`.

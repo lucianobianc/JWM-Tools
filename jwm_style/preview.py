@@ -38,6 +38,12 @@ def draw_preview(self, widget, cr):
             down,
         )
 
+    def frame(section, x, y, w, h, bg, raised=True):
+        if v(section, "@decorations", fallback="flat") == "motif":
+            relief(x, y, w, h, bg, raised)
+        else:
+            rect(x, y, w, h, bg)
+
     def window(x, y, w, h, active):
         draw_window(
             cr,
@@ -58,7 +64,7 @@ def draw_preview(self, widget, cr):
     def tray(x, y, w, h):
         bg = v("TrayStyle", "Background", fallback="#35383B")
         fg = v("TrayStyle", "Foreground", fallback="#E5E1D8")
-        relief(x, y, w, h, bg)
+        frame("TrayStyle", x, y, w, h, bg)
         start = self.start_attributes or {}
         text(
             x + 10,
@@ -79,7 +85,7 @@ def draw_preview(self, widget, cr):
                 if active
                 else v("TaskListStyle", "Foreground", fallback="#E5E1D8")
             )
-            relief(bx, y + 5, 84, 27, bbg, not active)
+            frame("TaskListStyle", bx, y + 5, 84, 27, bbg, not active)
             text(bx + 5, y + 23, name, bfg, 11, "TaskListStyle")
 
     def menu(x, y):
@@ -87,7 +93,7 @@ def draw_preview(self, widget, cr):
         fg = v("MenuStyle", "Foreground", fallback="#E5E1D8")
         abg = v("MenuStyle", "Active", "Background", fallback="#D09A52")
         afg = v("MenuStyle", "Active", "Foreground", fallback="#202124")
-        relief(x, y, 152, 111, bg)
+        frame("MenuStyle", x, y, 152, 111, bg)
         for i, label in enumerate(["Applications", "Terminal", "Settings", "Exit"]):
             if i == 1:
                 rect(x + 5, y + 7 + i * 25, 142, 24, abg)

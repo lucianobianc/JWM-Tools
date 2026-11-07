@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""JWM Style Editor 0.7. Run with an optional jwmrc path."""
+"""JWM Style Editor 0.8. Run with an optional jwmrc path."""
 import sys
 from pathlib import Path
 

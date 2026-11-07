@@ -22,6 +22,7 @@ SOURCE_ITEMS = (
     ".gitignore",
     "LICENSE",
     "README.md",
+    "docs",
     "jwm-style-editor",
     "jwm_style",
     "tests",

@@ -157,6 +157,12 @@ class Editor(Gtk.Window):
         for name in choices:
             self.presets.append_text(name)
         self.presets.set_active(choices.index(selected) if selected in choices else 0)
+        metadata = PRESET_METADATA.get(self.presets.get_active_text(), {})
+        self.presets.set_tooltip_text(
+            " — ".join(
+                filter(None, (metadata.get("reference"), metadata.get("description")))
+            )
+        )
 
     def detect_preset(self):
         actual = flatten(self.values)
@@ -407,6 +413,12 @@ class Editor(Gtk.Window):
         if self.loading:
             return
         name = self.presets.get_active_text()
+        metadata = PRESET_METADATA.get(name, {})
+        self.presets.set_tooltip_text(
+            " — ".join(
+                filter(None, (metadata.get("reference"), metadata.get("description")))
+            )
+        )
         self.pending.clear()
         self.start_pending.clear()
         if name in PRESETS:

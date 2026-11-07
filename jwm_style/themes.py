@@ -3,6 +3,8 @@
 import os
 import json
 from pathlib import Path
+from .colors import readable_text, contrast_ratio, mix, luminous_text, bevel
+from .theme_profiles import HERITAGE
 
 STYLES = [
     "WindowStyle",
@@ -102,17 +104,12 @@ COLLECTIONS = {
 PRESET_METADATA = {}
 
 
-def readable_text(hex_color):
-    rgb = [int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5)]
-    luminance = sum(c * weight for c, weight in zip(rgb, (0.2126, 0.7152, 0.0722)))
-    return "#202124" if luminance > 0.57 else "#FFFFFF"
-
-
 for category, items in COLLECTIONS.items():
     for name, swatches in items.items():
         PRESET_METADATA[name] = {
             "category": category,
-            "description": "Inspired palette" if category == "Heritage" else category,
+            "description": category + " palette adapted for JWM.",
+            "reference": "Original palette; no historical reproduction claimed.",
         }
         if swatches is None:
             continue
@@ -124,41 +121,145 @@ for category, items in COLLECTIONS.items():
             "accent_text": readable_text(accent),
             "muted": muted,
             "dark": dark,
+            "light": light,
         }
+
+for name, profile in HERITAGE.items():
+    PRESET_METADATA[name].update(
+        {key: profile[key] for key in ("description", "reference", "source")}
+    )
+for name in COLLECTIONS["Pastel Workstations"]:
+    PRESET_METADATA[name].update(
+        reference="CDE/Motif workstation-inspired original palette",
+        description="Pastel captions, neutral light menus and raised workstation controls. Not a stock CDE palette.",
+    )
+for name in COLLECTIONS["Hacker"]:
+    PRESET_METADATA[name].update(
+        reference="Terminal-inspired original palette",
+        description="Dark surfaces, luminous text and restrained neon selection accents.",
+    )
+
+
+def theme_roles(name):
+    """Assign colors to UI roles instead of applying one accent everywhere."""
+    p = PRESETS[name]
+    category = PRESET_METADATA[name]["category"]
+    light = p.get("light", p["muted"])
+    roles = dict(
+        surface=p["base"],
+        panel=p["base"],
+        menu=light,
+        title=p["muted"],
+        title_active=p["accent"],
+        selection=p["accent"],
+        tooltip=light,
+        decorations="flat",
+        width="2",
+        corner="4",
+    )
+    if category == "Heritage":
+        roles.update(HERITAGE[name])
+        roles.update(
+            width="4" if roles["decorations"] == "motif" else "3",
+            corner="0" if roles["decorations"] == "motif" else "4",
+        )
+    elif category == "Hacker":
+        roles.update(
+            surface=p["base"],
+            panel=p["dark"],
+            menu=p["dark"],
+            title=p["dark"],
+            title_active=p["base"],
+            selection=p["accent"],
+            tooltip=p["dark"],
+            title_ink=light,
+            active_ink=luminous_text(p["accent"], p["base"]),
+            panel_ink=luminous_text(p["accent"], p["dark"]),
+            menu_ink=luminous_text(p["accent"], p["dark"]),
+            tooltip_ink=light,
+            corner="0",
+        )
+        if name == "Phosphor":
+            # Try a brighter focused caption without changing the surfaces.
+            roles["active_ink"] = light
+            roles["title_ink"] = luminous_text(p["accent"], p["dark"])
+    elif category == "Pastel Workstations":
+        roles.update(
+            title=p["muted"],
+            menu=light,
+            selection=p["base"],
+            decorations="motif",
+            width="4",
+            corner="0",
+        )
+    elif category == "Chromatic":
+        roles.update(
+            title=mix(p["muted"], light, 0.3),
+            title_active=p["dark"],
+            selection=p["base"],
+        )
+    elif category == "Modern":
+        roles.update(title=mix(p["base"], light, 0.5), selection=p["dark"])
+    else:
+        # Preserve the original collection's dark surfaces and familiar accents.
+        roles.update(menu=p["base"], tooltip=p["muted"])
+        if name == "Classic Motif":
+            roles.update(decorations="motif", width="4", corner="0")
+    return roles
 
 
 def preset_values(name):
     p = PRESETS[name]
-    result = {}
-    for section in STYLES:
-        result[section] = {"Foreground": p["text"], "Background": p["base"]}
+    r = theme_roles(name)
+
+    def pair(background, preferred=None):
+        return {
+            "Foreground": readable_text(background, preferred),
+            "Background": background,
+        }
+
+    result = {section: pair(r["surface"], p["text"]) for section in STYLES}
+    result["WindowStyle"] = pair(r["title"], r.get("title_ink"))
     result["WindowStyle"].update(
-        Foreground=p["dark"], Background=p["muted"], Width="4", Corner="0"
+        {
+            "@decorations": r["decorations"],
+            "Width": r["width"],
+            "Height": "0",
+            "Outline": bevel(r["title"]),
+            "Corner": r["corner"],
+            "Active": pair(r["title_active"], r.get("active_ink", p["accent_text"])),
+        }
     )
-    result["WindowStyle"]["Active"] = {
-        "Foreground": p["accent_text"],
-        "Background": p["accent"],
-    }
-    result["TrayStyle"]["Font"] = "Sans-12"
-    result["TaskListStyle"]["Active"] = {
-        "Foreground": p["accent_text"],
-        "Background": p["accent"],
-    }
-    result["TaskListStyle"]["Minimized"] = {
-        "Foreground": p["muted"],
-        "Background": p["dark"],
-    }
-    result["PagerStyle"] = {
-        "Foreground": p["muted"],
-        "Background": p["base"],
-        "Text": p["text"],
-        "Active": {"Foreground": p["accent"], "Background": p["dark"]},
-    }
-    result["MenuStyle"]["Active"] = {
-        "Foreground": p["accent_text"],
-        "Background": p["accent"],
-    }
-    result["PopupStyle"] = {"Foreground": p["dark"], "Background": p["muted"]}
+    result["WindowStyle"]["Active"]["Outline"] = bevel(r["title_active"])
+    if PRESET_METADATA[name]["category"] == "Hacker":
+        result["WindowStyle"]["Outline"] = p["muted"]
+        result["WindowStyle"]["Active"]["Outline"] = p["accent"]
+    result["TrayStyle"] = pair(r["panel"], r.get("panel_ink"))
+    result["TaskListStyle"]["Active"] = pair(r["selection"])
+    # A minimized task stays readable but does not compete with the active task.
+    result["TaskListStyle"]["Minimized"] = pair(mix(r["surface"], r["panel"], 0.5))
+    result["MenuStyle"] = pair(r["menu"], r.get("menu_ink"))
+    result["MenuStyle"]["Active"] = pair(r["selection"])
+    result["PopupStyle"] = pair(r["tooltip"], r.get("tooltip_ink"))
+    pager_active = mix(r["surface"], r["selection"], 0.18)
+    pager_text = readable_text(r["surface"] + ";" + pager_active)
+    if contrast_ratio(pager_text, r["surface"] + ";" + pager_active) < 4.5:
+        pager_active = r["surface"]
+        pager_text = readable_text(pager_active)
+    result["PagerStyle"] = dict(
+        pair(r["surface"]), Text=pager_text, Active=pair(pager_active)
+    )
+    for section in ("WindowStyle", "TrayStyle", "TaskListStyle", "MenuStyle"):
+        result[section]["@decorations"] = r["decorations"]
+    # Portable family aliases; historical fonts and bitmaps are not bundled.
+    for section in STYLES:
+        result[section]["Font"] = (
+            "Monospace-10"
+            if PRESET_METADATA[name]["category"] == "Hacker"
+            else "Sans-10"
+        )
+    if PRESET_METADATA[name]["category"] != "Hacker":
+        result["WindowStyle"]["Font"] = "Sans-10:bold"
     return result
 
 
