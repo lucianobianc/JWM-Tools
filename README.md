@@ -1,6 +1,6 @@
 # JWM Tools
 
-Tools for JWM on Linux/X11. All interfaces use English.
+Tools for JWM on Linux/X11.
 
 | Tool | Function | Usage |
 | --- | --- | --- |
@@ -19,7 +19,7 @@ Download the `.deb` from [Releases](https://github.com/lucianobianc/JWM-Tools/re
 sudo apt install ./jwm-tools_0.1-1_all.deb
 ```
 
-The package contains all six tools, with launchers under **Utilities**. Audio requires PulseAudio or PipeWire with PulseAudio support.
+The package contains all six tools. Audio requires PulseAudio or PipeWire with PulseAudio support.
 
 ## From source
 
