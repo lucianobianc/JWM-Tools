@@ -24,9 +24,15 @@ Include or JWM action. Selecting a leaf adds the new entry after it. **Installed
 application…** fills in its name, command and icon. **Program or script…** opens a
 file chooser. Commands use shell syntax without an `exec:` prefix.
 
-Enter an icon theme name or use **Choose image…** to select an image file with a
-preview. The tree displays available icons. Icon files remain at their chosen
-paths; they are not copied into the configuration.
+Use **Choose icon…** to browse the installed theme in a visual grid, search by
+name and filter by category. **Load more** shows further matches. Symbolic icons
+are optional. **Choose image file…** selects a custom image; **Remove icon** clears
+it. The same picker is available for the Start button in `jwm_style`.
+
+Selections store the resolved image file path so JWM can find the icon without
+extra `IconPath` configuration. Files remain at those paths and are not copied;
+removing a theme package may therefore remove an icon used by the menu. You can
+also enter an icon name or image path manually. The tree displays available icons.
 
 **Move up / Move down** change sibling order. **Indent** puts an entry inside the
 preceding submenu. **Outdent** moves it after its containing submenu. JWM menus

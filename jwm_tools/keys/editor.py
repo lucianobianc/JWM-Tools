@@ -338,7 +338,7 @@ class KeysEditor(Gtk.Window):
             ("New mouse binding", lambda *_: self.edit_binding("Mouse")),
             ("Edit", self.edit_selected),
             ("Delete", self.remove_selected),
-            ("Open source", self.open_source),
+            ("Open source file", self.open_source),
             ("Discard", self.discard),
             ("View changes", self.show_changes),
             ("Save", self.save),
@@ -351,8 +351,11 @@ class KeysEditor(Gtk.Window):
                 self.edit_button = button
             elif label == "Delete":
                 self.remove_button = button
-            elif label == "Open source":
+            elif label == "Open source file":
                 self.source_button = button
+                button.set_tooltip_text(
+                    "Open the included configuration file that defines this entry."
+                )
         self.connect("delete-event", lambda *_: not self.can_discard())
         self.refresh()
 

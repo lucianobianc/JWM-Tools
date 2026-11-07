@@ -45,7 +45,7 @@ To start a program, use `exec:command`. The editor does not execute these action
 when opening or editing a file.
 
 Static Includes are read; included bindings are read-only in the list.
-**Open source** opens that file for explicit editing. Dynamic `exec:` Includes
+**Open source file** opens that file for explicit editing. Dynamic `exec:` Includes
 are not executed. Relative paths follow JWM's working directory.
 
 Repeated combinations are flagged. Conflict checks consider modifiers, key names,

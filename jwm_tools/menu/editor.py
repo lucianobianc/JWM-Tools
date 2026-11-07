@@ -11,6 +11,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GdkPixbuf, GLib, Gio
 from .model import MenuDocument, Node, KINDS, TEXT_KINDS
 from ..startup.editor import ApplicationDialog, StartupEditor
+from ..iconpicker import choose_icon
 
 
 def icon_pixbuf(name, size=22):
@@ -60,7 +61,7 @@ class EntryDialog(Gtk.Dialog):
         iconrow = Gtk.Box(spacing=8)
         iconrow.pack_start(self.image, False, False, 0)
         iconrow.pack_start(self.icon, True, True, 0)
-        browse = Gtk.Button(label="Choose image…")
+        browse = Gtk.Button(label="Choose icon…")
         browse.connect("clicked", self.choose_icon)
         iconrow.pack_start(browse, False, False, 0)
         self.tooltip = Gtk.Entry()
@@ -191,9 +192,9 @@ class EntryDialog(Gtk.Dialog):
             chooser.destroy()
 
     def choose_icon(self, *_):
-        filename = self.choose_path("Choose menu icon", image=True)
-        if filename:
-            self.icon.set_text(filename)
+        value = choose_icon(self, self.icon.get_text())
+        if value is not None:
+            self.icon.set_text(value)
 
     def choose_program(self, *_):
         filename = self.choose_path(

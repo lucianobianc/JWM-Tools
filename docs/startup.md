@@ -17,7 +17,7 @@ syntax.
 
 **Move up** and **Move down** change the selected entry's position in the XML,
 within the same event. New and disabled entries can also be moved. Changes are
-only written when you save. Moves cannot cross an `Include`; use **Open source**
+only written when you save. Moves cannot cross an `Include`; use **Open source file**
 to edit entries owned by another file.
 
 JWM 2.4 calls each event's commands from bottom to top in the XML. Moving down

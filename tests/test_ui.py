@@ -70,12 +70,11 @@ class EditorTests(unittest.TestCase):
         entry, button = row.get_children()
         selected = str(Path(self.temp.name) / "Start & menu.png")
         Path(selected).touch()
-        with patch("jwm_tools.style.editor.Gtk.FileChooserDialog") as chooser:
-            dialog = chooser.return_value
-            dialog.run.return_value = Gtk.ResponseType.OK
-            dialog.get_filename.return_value = selected
+        with patch(
+            "jwm_tools.style.editor.choose_icon", return_value=selected
+        ) as picker:
             button.emit("clicked")
-            dialog.destroy.assert_called_once()
+            picker.assert_called_once()
         self.assertEqual(entry.get_text(), selected)
         self.assertEqual(self.editor.start_pending["icon"], selected)
         self.assertEqual(self.path.read_bytes(), self.original)
@@ -88,12 +87,8 @@ class EditorTests(unittest.TestCase):
         self.editor.section.set_active(len(STYLES))
         entry, button = self.editor.grid.get_child_at(1, 1).get_children()
         entry.set_text("existing-icon")
-        with patch("jwm_tools.style.editor.Gtk.FileChooserDialog") as chooser:
-            dialog = chooser.return_value
-            dialog.run.return_value = Gtk.ResponseType.CANCEL
+        with patch("jwm_tools.style.editor.choose_icon", return_value=None):
             button.emit("clicked")
-            dialog.get_filename.assert_not_called()
-            dialog.destroy.assert_called_once()
         self.assertEqual(entry.get_text(), "existing-icon")
         self.assertEqual(self.editor.start_pending["icon"], "existing-icon")
         self.assertEqual(self.path.read_bytes(), self.original)

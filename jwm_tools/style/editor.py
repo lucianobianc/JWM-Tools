@@ -1,7 +1,6 @@
 """GTK editor; configuration changes remain pending until explicitly applied."""
 
 import sys
-import os
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -15,6 +14,7 @@ from .fonts import jwm_to_pango, pango_to_jwm
 from .preview import draw_preview
 from .buttons import read_buttons
 from .themes import StyleStore
+from ..iconpicker import choose_icon
 
 
 class Editor(Gtk.Window):
@@ -216,8 +216,8 @@ class Editor(Gtk.Window):
                         browse = Gtk.Button.new_from_icon_name(
                             "document-open-symbolic", Gtk.IconSize.BUTTON
                         )
-                        browse.set_tooltip_text("Choose icon file…")
-                        browse.get_accessible().set_name("Choose icon file")
+                        browse.set_tooltip_text("Choose icon…")
+                        browse.get_accessible().set_name("Choose icon")
                         browse.connect("clicked", self.on_choose_start_icon, entry)
                         row.pack_start(browse, False, False, 0)
                         self.grid.attach(row, 1, i, 1, 1)
@@ -288,35 +288,9 @@ class Editor(Gtk.Window):
         return box
 
     def on_choose_start_icon(self, button, entry):
-        dialog = Gtk.FileChooserDialog(
-            title="Choose Start Button icon",
-            transient_for=self,
-            action=Gtk.FileChooserAction.OPEN,
-        )
-        dialog.add_buttons(
-            "Cancel", Gtk.ResponseType.CANCEL, "Select icon", Gtk.ResponseType.OK
-        )
-        dialog.set_local_only(True)
-        images = Gtk.FileFilter()
-        images.set_name("Images")
-        images.add_pixbuf_formats()
-        dialog.add_filter(images)
-        all_files = Gtk.FileFilter()
-        all_files.set_name("All files")
-        all_files.add_pattern("*")
-        dialog.add_filter(all_files)
-        current = Path(os.path.expandvars(entry.get_text())).expanduser()
-        if current.is_absolute() and current.is_file():
-            dialog.set_filename(str(current))
-        else:
-            dialog.set_current_folder(str(self.path.parent))
-        try:
-            if dialog.run() == Gtk.ResponseType.OK:
-                filename = dialog.get_filename()
-                if filename:
-                    entry.set_text(filename)
-        finally:
-            dialog.destroy()
+        value = choose_icon(self, entry.get_text())
+        if value is not None:
+            entry.set_text(value)
 
     def on_start_entry(self, entry, key):
         if self.loading:

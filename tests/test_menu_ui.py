@@ -53,15 +53,19 @@ class MenuUITests(unittest.TestCase):
     def test_icon_picker_is_file_dialog_and_cancel_preserves(self):
         dialog = EntryDialog(self.window)
         try:
-            with patch("jwm_tools.menu.editor.Gtk.FileChooserDialog") as factory:
-                factory.return_value.run.return_value = Gtk.ResponseType.OK
-                factory.return_value.get_filename.return_value = "/tmp/my icon.svg"
+            with patch(
+                "jwm_tools.menu.editor.choose_icon", return_value="/tmp/my icon.svg"
+            ) as picker:
                 dialog.choose_icon()
+                picker.assert_called_once_with(dialog, "")
                 self.assertEqual(dialog.icon.get_text(), "/tmp/my icon.svg")
                 self.assertIn("icon", dialog.candidate()[1])
-                factory.return_value.run.return_value = Gtk.ResponseType.CANCEL
+            with patch("jwm_tools.menu.editor.choose_icon", return_value=None):
                 dialog.choose_icon()
                 self.assertEqual(dialog.icon.get_text(), "/tmp/my icon.svg")
+            with patch("jwm_tools.menu.editor.choose_icon", return_value=""):
+                dialog.choose_icon()
+                self.assertNotIn("icon", dialog.candidate()[1])
         finally:
             dialog.destroy()
 

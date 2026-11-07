@@ -18,7 +18,8 @@ changed implicitly. If a later Include overrides a local property, open that
 file to edit it. Ambiguous blocks cannot be saved.
 
 Fonts use the GTK chooser. Window decorations can be Flat or Motif.
-The start menu button icon can be selected with a file picker.
+The Start button uses a searchable icon picker with theme categories, previews
+and a custom image file chooser.
 
 The preview uses global button images, focus variants, `IconPath` and
 `TitleButtonOrder`. Native button geometry follows
