@@ -31,6 +31,11 @@ Para colocar o indicador na bandeja do JWM:
 Execute `jwm_style ~/.jwmrc`. O editor usa a configuração aberta e os estilos
 que você salvar; não inclui presets internos.
 
+## jwm_keys
+
+Execute `jwm_keys ~/.jwmrc` para editar vínculos de teclado e mouse.
+Vínculos de Includes mostram o arquivo de origem. Consulte [o editor de atalhos](keys.md).
+
 ## Mudança de nomes
 
 | Anterior | Atual |
@@ -47,3 +52,9 @@ O menu continua em `~/.jwm-menu`. Os estilos pessoais continuam em
 
 O pacote Debian `jwm-tools` substitui o antigo `jwm-style-editor`. A versão 0.1
 marca a primeira distribuição conjunta das quatro ferramentas.
+
+## jwm_startup
+
+Execute `jwm_startup` para editar os comandos da sessão em `~/.jwmrc`.
+Também aceita outro arquivo: `jwm_startup /caminho/jwmrc`.
+Consulte [Comandos da sessão](startup.md).

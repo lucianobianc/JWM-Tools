@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=jwm_keys
+Comment=Edit JWM keyboard and mouse bindings
+Comment[pt_BR]=Edite atalhos de teclado e vínculos do mouse no JWM
+Exec=jwm_keys
+Icon=preferences-desktop-keyboard-shortcuts
+Terminal=false
+Categories=Settings;DesktopSettings;
+StartupNotify=true

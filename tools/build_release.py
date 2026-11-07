@@ -2,7 +2,7 @@
 """Build source and architecture-independent Debian assets without root.
 
 Only Python's standard library and dpkg-deb are required. The .deb contains
-all four tools; the source archive contains this repository's sources.
+all tools; the source archive contains this repository's sources.
 SOURCE_DATE_EPOCH controls reproducible timestamps.
 """
 import argparse
@@ -14,19 +14,20 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from jwm_tools import COMMANDS, __version__
+
 SOURCE_ITEMS = (
     ".gitignore",
     "LICENSE",
     "README.md",
     "docs",
-    "jwm_audio",
-    "jwm_menu",
-    "jwm_ram",
-    "jwm_style",
+    *COMMANDS,
     "jwm_tools",
     "tests",
     "tools",
@@ -77,10 +78,7 @@ def main():
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    version = re.search(
-        r'__version__\s*=\s*[\'"]([^\'"]+)',
-        (ROOT / "jwm_tools/__init__.py").read_text(),
-    ).group(1)
+    version = __version__
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", version):
         raise SystemExit("Unsupported release version")
     timestamp = epoch()
@@ -101,22 +99,14 @@ def main():
                     entry.mtime = timestamp
                     entry.mode = (
                         0o755
-                        if file.name
-                        in (
-                            "jwm_audio",
-                            "jwm_menu",
-                            "jwm_ram",
-                            "jwm_style",
-                            "build_release.py",
-                            "install.py",
-                        )
+                        if file.name in (*COMMANDS, "build_release.py", "install.py")
                         else 0o644
                     )
                     archive.addfile(entry, io.BytesIO(data))
     with tempfile.TemporaryDirectory(prefix="jwm-deb-", dir=output) as tmp:
         stage = Path(tmp)
         app = stage / "usr/share/jwm-tools"
-        for command in ("jwm_audio", "jwm_menu", "jwm_ram", "jwm_style"):
+        for command in COMMANDS:
             write(
                 app / command,
                 (ROOT / command)
@@ -138,7 +128,7 @@ def main():
         )
         changelog = (
             f"jwm-tools ({version}-1) unstable; urgency=medium\n\n"
-            "  * Distribute jwm_audio, jwm_menu, jwm_ram and jwm_style together.\n\n"
+            "  * Distribute the JWM Tools commands together.\n\n"
             f" -- Luciano Biancardine <lucianobiancardine@gmail.com>  {formatdate(timestamp, usegmt=True)}\n"
         )
         write(docs / "changelog.Debian.gz", gzip.compress(changelog.encode(), mtime=0))

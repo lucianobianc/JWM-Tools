@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Editor de atalhos de teclado e mouse do JWM."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from jwm_tools.keys.editor import main
+
+if __name__ == "__main__":
+    main()

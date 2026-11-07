@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Instala os quatro comandos no diretório do usuário."""
+"""Instala os comandos no diretório do usuário."""
 import argparse
 import json
 from pathlib import Path
 import shutil
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-COMMANDS = ("jwm_audio", "jwm_menu", "jwm_ram", "jwm_style")
+sys.path.insert(0, str(ROOT))
+from jwm_tools import COMMANDS
 
 
 def install(prefix):

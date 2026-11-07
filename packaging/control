@@ -9,8 +9,10 @@ Recommends: fonts-dejavu-core
 Conflicts: jwm-style-editor
 Replaces: jwm-style-editor
 Homepage: https://github.com/lucianobianc/JWM-Tools
-Description: audio, menu, resource monitor and style tools for JWM
+Description: audio, menu, resource, style, binding and startup tools for JWM
  jwm_audio controls PulseAudio-compatible devices and application volumes.
  jwm_menu generates a JWM menu from installed desktop entries.
  jwm_ram displays Linux resource usage in the tray.
  jwm_style edits JWM appearance and saves personal styles.
+ jwm_keys edits keyboard shortcuts and mouse bindings.
+ jwm_startup edits session startup, restart and shutdown commands.

@@ -54,7 +54,14 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("python3-tk", metadata)
         self.assertIn("python3-pulsectl", metadata)
         self.assertIn("Conflicts: jwm-style-editor", metadata)
-        for command in ("jwm_audio", "jwm_menu", "jwm_ram", "jwm_style"):
+        for command in (
+            "jwm_audio",
+            "jwm_menu",
+            "jwm_ram",
+            "jwm_style",
+            "jwm_keys",
+            "jwm_startup",
+        ):
             launcher = self.installed / "usr/bin" / command
             self.assertTrue(launcher.is_symlink())
             self.assertTrue(os.access(launcher, os.X_OK))
@@ -88,6 +95,9 @@ class PackagingTests(unittest.TestCase):
                 "jwm_menu",
                 "jwm_ram",
                 "jwm_style",
+                "jwm_keys",
+                "jwm_startup",
+                "jwm_tools/startup/editor.py",
                 "jwm_tools/style/editor.py",
                 "tests/test_config.py",
                 "tools/build_release.py",
@@ -103,7 +113,14 @@ class PackagingTests(unittest.TestCase):
             )
 
     def test_all_packaged_commands_report_version_outside_checkout(self):
-        for command in ("jwm_audio", "jwm_menu", "jwm_ram", "jwm_style"):
+        for command in (
+            "jwm_audio",
+            "jwm_menu",
+            "jwm_ram",
+            "jwm_style",
+            "jwm_keys",
+            "jwm_startup",
+        ):
             with self.subTest(command=command):
                 result = subprocess.run(
                     [str(self.installed / "usr/bin" / command), "--version"],
@@ -152,7 +169,14 @@ class PackagingTests(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
-        for command in ("jwm_audio", "jwm_menu", "jwm_ram", "jwm_style"):
+        for command in (
+            "jwm_audio",
+            "jwm_menu",
+            "jwm_ram",
+            "jwm_style",
+            "jwm_keys",
+            "jwm_startup",
+        ):
             result = subprocess.run(
                 [str(prefix / "bin" / command), "--version"],
                 cwd=self.base,
