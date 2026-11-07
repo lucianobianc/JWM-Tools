@@ -354,7 +354,8 @@ class MenuEditor(Gtk.Window):
         foreign = node in self.origins if node else False
         editable = bool(node and node.editable)
         self.buttons["Edit"].set_sensitive(editable)
-        for label in ("Delete", "Move up", "Move down", "Indent", "Outdent"):
+        self.buttons["Delete"].set_sensitive(editable)
+        for label in ("Move up", "Move down", "Indent", "Outdent"):
             self.buttons[label].set_sensitive(editable and not foreign)
         self.buttons["Open source file"].set_sensitive(
             bool(node and (foreign or self.document.include_path(node)))
@@ -621,13 +622,12 @@ class MenuEditor(Gtk.Window):
 
     def remove_selected(self, *_):
         node = self.selected()
-        if (
-            node
-            and node.editable
-            and node not in self.origins
-            and self.confirm(
-                "Delete this entry and any submenu contents? Changes are written when you save."
-            )
+        if not node or not node.editable:
+            return
+        if node in self.origins:
+            node = self.open_origin(node)
+        if node and self.confirm(
+            "Delete this entry and any submenu contents? Changes are written when you save."
         ):
             self.document.remove(node)
             self.refresh()

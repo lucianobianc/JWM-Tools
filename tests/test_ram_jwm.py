@@ -28,3 +28,12 @@ class RamTooltipTests(unittest.TestCase):
             timeout=25,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_swallow_restarts_monitor_after_repeated_jwm_restarts(self):
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name("ram_restart_worker.py"))],
+            capture_output=True,
+            text=True,
+            timeout=35,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

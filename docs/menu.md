@@ -56,10 +56,11 @@ before saving.
 ## Includes and generated menus
 
 Static Includes expand in the tree, including nested Includes. **Source file**
-shows where each entry is defined. **Edit** on an included entry opens its source
-file and selects that entry for editing. Save there, then use **Back** to return
+shows where each entry is defined. **Edit** or **Delete** on an included entry opens its source
+file and selects that entry. Deletion asks for confirmation and remains pending
+until that file is saved. Save there, then use **Back** to return
 to the parent menu. **Open source file** also navigates to the defining file.
-Moving or deleting included entries requires opening that file first.
+Moving included entries requires opening that file first.
 
 Relative paths follow JWM's working directory. Missing files, Include cycles and
 depth limits are reported without changing the configuration. Dynamic Includes and

@@ -242,7 +242,7 @@ class MenuUITests(unittest.TestCase):
         program = next(node for node in self.window.origins if node.kind == "Program")
         self.select(program)
         self.assertTrue(self.window.buttons["Edit"].get_sensitive())
-        self.assertFalse(self.window.buttons["Delete"].get_sensitive())
+        self.assertTrue(self.window.buttons["Delete"].get_sensitive())
         with patch.object(self.window, "edit_form") as form:
             self.window.edit_selected()
             local = form.call_args.args[0]
@@ -325,3 +325,29 @@ class MenuUITests(unittest.TestCase):
             self.assertEqual(len({a.height for a in allocations}), 1)
         finally:
             dialog.destroy()
+
+    def test_delete_included_entry_edits_source_pending_until_save(self):
+        included = Path(self.temp.name) / "delete-source"
+        included.write_text(
+            '<JWM><Program label="Remove">true</Program><Program label="Keep">false</Program></JWM>'
+        )
+        self.path.write_text(
+            f"<JWM><RootMenu><Include>{included}</Include></RootMenu></JWM>"
+        )
+        original = self.path.read_bytes()
+        before = included.read_bytes()
+        self.window.load(self.path)
+        node = next(n for n in self.window.origins if n.attrs.get("label") == "Remove")
+        self.select(node)
+        self.assertTrue(self.window.buttons["Delete"].get_sensitive())
+        with patch.object(self.window, "confirm", return_value=True):
+            self.window.buttons["Delete"].clicked()
+        self.assertEqual(self.window.document.path, included)
+        self.assertEqual(included.read_bytes(), before)
+        self.assertTrue(self.window.save())
+        self.assertNotIn("Remove", included.read_text())
+        self.assertIn("Keep", included.read_text())
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(
+            included.with_name(included.name + ".bak").read_bytes(), before
+        )
