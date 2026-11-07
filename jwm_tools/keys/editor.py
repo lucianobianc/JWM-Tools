@@ -51,8 +51,8 @@ def event_mask(state):
 class BindingDialog(Gtk.Dialog):
     def __init__(self, parent, kind, binding=None):
         super().__init__(
-            title=("Editar " if binding else "Adicionar ")
-            + ("teclado" if kind == "Key" else "mouse"),
+            title=("Edit " if binding else "Add ")
+            + ("keyboard" if kind == "Key" else "mouse"),
             transient_for=parent,
             modal=True,
         )
@@ -60,7 +60,7 @@ class BindingDialog(Gtk.Dialog):
         self.binding = binding
         self.set_default_size(570, 0)
         self.add_buttons(
-            "Cancelar", Gtk.ResponseType.CANCEL, "Confirmar", Gtk.ResponseType.OK
+            "Cancel", Gtk.ResponseType.CANCEL, "Confirm", Gtk.ResponseType.OK
         )
         self.set_default_response(Gtk.ResponseType.OK)
         self.grid = Gtk.Grid(column_spacing=12, row_spacing=12, margin=16)
@@ -79,20 +79,20 @@ class BindingDialog(Gtk.Dialog):
             check.set_active(char in mask)
             self.modifiers[char] = check
             flow.add(check)
-        self.attach("Modificadores", flow, 0)
+        self.attach("Modifiers", flow, 0)
         if kind == "Key":
             self.mode = combo(
-                [("key", "Nome X11"), ("keycode", "Keycode")],
+                [("key", "X11 name"), ("keycode", "Keycode")],
                 "key" if attrs.get("key") or not attrs.get("keycode") else "keycode",
             )
             self.trigger = entry(attrs.get("key") or attrs.get("keycode", ""))
             row = Gtk.Box(spacing=6)
             row.pack_start(self.trigger, True, True, 0)
-            capture = Gtk.Button(label="Capturar…")
+            capture = Gtk.Button(label="Capture…")
             capture.connect("clicked", self.capture_key)
             row.pack_start(capture, False, False, 0)
-            self.attach("Identificação", self.mode, 1)
-            self.attach("Tecla", row, 2)
+            self.attach("Identification", self.mode, 1)
+            self.attach("Key", row, 2)
             self.context = None
         else:
             self.mode = None
@@ -109,11 +109,11 @@ class BindingDialog(Gtk.Dialog):
                 self.trigger.get_child().set_text(code)
             row = Gtk.Box(spacing=6)
             row.pack_start(self.trigger, True, True, 0)
-            capture = Gtk.Button(label="Capturar…")
+            capture = Gtk.Button(label="Capture…")
             capture.connect("clicked", self.capture_mouse)
             row.pack_start(capture, False, False, 0)
-            self.attach("Contexto", self.context, 1)
-            self.attach("Botão / evento", row, 2)
+            self.attach("Context", self.context, 1)
+            self.attach("Button / event", row, 2)
         self.action = Gtk.ComboBoxText.new_with_entry()
         for action in ("exec:", "root:1", *ACTIONS):
             self.action.append_text(action)
@@ -121,9 +121,9 @@ class BindingDialog(Gtk.Dialog):
             binding.action if binding else "exec:" if kind == "Key" else "move"
         )
         self.action.set_hexpand(True)
-        self.attach("Ação", self.action, 3)
+        self.attach("Action", self.action, 3)
         hint = Gtk.Label(
-            label="Use exec:comando para executar um programa. A ação só será ativada pelo JWM depois de salvar e reiniciar.",
+            label="Use exec:command to run a program. Bindings take effect after saving and restarting JWM.",
             xalign=0,
         )
         hint.set_line_wrap(True)
@@ -200,10 +200,10 @@ class BindingDialog(Gtk.Dialog):
         return True
 
     def capture_key(self, *_):
-        dialog = Gtk.Dialog(title="Capturar tecla", transient_for=self, modal=True)
-        dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+        dialog = Gtk.Dialog(title="Capture key", transient_for=self, modal=True)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
         label = Gtk.Label(
-            label="Pressione a combinação desejada.\nAtalhos globais podem ser interceptados pelo JWM.",
+            label="Press the desired combination.\nGlobal shortcuts may be intercepted by JWM.",
             margin=24,
         )
         dialog.get_content_area().add(label)
@@ -214,24 +214,24 @@ class BindingDialog(Gtk.Dialog):
 
     def capture_mouse(self, *_):
         dialog = Gtk.Dialog(
-            title="Capturar botão do mouse", transient_for=self, modal=True
+            title="Capture mouse button", transient_for=self, modal=True
         )
-        dialog.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
         box = dialog.get_content_area()
         box.set_border_width(16)
         box.set_spacing(12)
         mode = combo(
             [
-                ("press", "Pressionar"),
-                ("release", "Soltar"),
-                ("double", "Duplo clique"),
+                ("press", "Press"),
+                ("release", "Release"),
+                ("double", "Double click"),
             ],
             "press",
         )
         box.add(mode)
         area = Gtk.EventBox()
         area.add(
-            Gtk.Label(label="Clique ou role aqui com o botão desejado.", margin=24)
+            Gtk.Label(label="Click or scroll here with the desired button.", margin=24)
         )
         area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.SCROLL_MASK)
 
@@ -284,8 +284,8 @@ class KeysEditor(Gtk.Window):
         self.file_label.set_ellipsize(2)
         header.pack_start(self.file_label, True, True, 0)
         for label, callback in [
-            ("Abrir…", self.open_file),
-            ("Recarregar", self.reload_file),
+            ("Open…", self.open_file),
+            ("Reload", self.reload_file),
         ]:
             button = Gtk.Button(label=label)
             button.connect("clicked", callback)
@@ -293,12 +293,12 @@ class KeysEditor(Gtk.Window):
         tools = Gtk.Box(spacing=8)
         outer.pack_start(tools, False, False, 0)
         self.kind_filter = combo(
-            [("all", "Todos"), ("Key", "Teclado"), ("Mouse", "Mouse")], "all"
+            [("all", "All"), ("Key", "Keyboard"), ("Mouse", "Mouse")], "all"
         )
         self.kind_filter.connect("changed", self.refilter)
         tools.pack_start(self.kind_filter, False, False, 0)
         self.search = Gtk.SearchEntry()
-        self.search.set_placeholder_text("Buscar tecla, ação, contexto ou arquivo")
+        self.search.set_placeholder_text("Search keys, actions, contexts or files")
         self.search.connect("search-changed", self.refilter)
         tools.pack_start(self.search, True, True, 0)
         self.store = Gtk.ListStore(object, str, str, str, str, str, str, str)
@@ -308,7 +308,7 @@ class KeysEditor(Gtk.Window):
         self.tree.set_tooltip_column(7)
         self.tree.set_headers_visible(True)
         for i, label in enumerate(
-            ("Tipo", "Atalho", "Contexto", "Ação", "Arquivo", "Estado"), 1
+            ("Type", "Shortcut", "Context", "Action", "File", "Status"), 1
         ):
             renderer = Gtk.CellRendererText()
             renderer.props.ellipsize = 3
@@ -334,24 +334,24 @@ class KeysEditor(Gtk.Window):
         buttons.set_min_children_per_line(1)
         outer.pack_start(buttons, False, False, 0)
         for label, callback in [
-            ("Novo teclado", lambda *_: self.edit_binding("Key")),
-            ("Novo mouse", lambda *_: self.edit_binding("Mouse")),
-            ("Editar", self.edit_selected),
-            ("Excluir", self.remove_selected),
-            ("Abrir origem", self.open_source),
-            ("Descartar", self.discard),
-            ("Ver alterações", self.show_changes),
-            ("Salvar", self.save),
-            ("Salvar e reiniciar JWM", self.apply),
+            ("New keyboard binding", lambda *_: self.edit_binding("Key")),
+            ("New mouse binding", lambda *_: self.edit_binding("Mouse")),
+            ("Edit", self.edit_selected),
+            ("Delete", self.remove_selected),
+            ("Open source", self.open_source),
+            ("Discard", self.discard),
+            ("View changes", self.show_changes),
+            ("Save", self.save),
+            ("Save and restart JWM", self.apply),
         ]:
             button = Gtk.Button(label=label)
             button.connect("clicked", callback)
             buttons.add(button)
-            if label == "Editar":
+            if label == "Edit":
                 self.edit_button = button
-            elif label == "Excluir":
+            elif label == "Delete":
                 self.remove_button = button
-            elif label == "Abrir origem":
+            elif label == "Open source":
                 self.source_button = button
         self.connect("delete-event", lambda *_: not self.can_discard())
         self.refresh()
@@ -389,12 +389,12 @@ class KeysEditor(Gtk.Window):
         conflicts = self.document.conflicts()
         for binding in self.document.entries():
             state = (
-                "Incluído · leitura"
+                "Included · read-only"
                 if not binding.editable
                 else (
-                    "Novo"
+                    "New"
                     if binding.span is None
-                    else "Alterado" if binding.token in self.document.changes else ""
+                    else "Changed" if binding.token in self.document.changes else ""
                 )
             )
             if binding.token in conflicts:
@@ -402,7 +402,7 @@ class KeysEditor(Gtk.Window):
             iterator = self.store.append(
                 [
                     binding,
-                    "Teclado" if binding.kind == "Key" else "Mouse",
+                    "Keyboard" if binding.kind == "Key" else "Mouse",
                     binding.shortcut(),
                     CONTEXTS.get(binding.attrs.get("context"), ""),
                     binding.action,
@@ -420,11 +420,9 @@ class KeysEditor(Gtk.Window):
         self.file_label.set_text(str(self.document.path))
         self.file_label.set_tooltip_text(str(self.document.path))
         changes = len(self.document.changes) + len(self.document.additions)
-        message = (
-            f"{len(self.document.entries())} vínculos · {changes} alterações pendentes"
-        )
+        message = f"{len(self.document.entries())} bindings · {changes} pending changes"
         if conflicts:
-            message += f" · {len(conflicts)} vínculos em conflito (a última definição pode prevalecer)"
+            message += f" · {len(conflicts)} conflicting bindings (the last definition may take precedence)"
         if self.document.config.warnings:
             message += "\n" + "; ".join(self.document.config.warnings)
         self.status.set_text(message)
@@ -455,9 +453,7 @@ class KeysEditor(Gtk.Window):
         return response == Gtk.ResponseType.YES
 
     def can_discard(self):
-        return not self.document.dirty or self.confirm(
-            "Descartar as alterações não salvas?"
-        )
+        return not self.document.dirty or self.confirm("Discard unsaved changes?")
 
     def edit_binding(self, kind, binding=None):
         dialog = BindingDialog(self, kind, binding)
@@ -469,7 +465,7 @@ class KeysEditor(Gtk.Window):
                         candidate, binding.token if binding else None
                     )
                     if matches and not self.confirm(
-                        "Essa combinação já aparece em outro vínculo. Manter as duas definições?"
+                        "This combination is already assigned. Keep both definitions?"
                     ):
                         continue
                     if binding:
@@ -497,7 +493,9 @@ class KeysEditor(Gtk.Window):
         if (
             binding
             and binding.editable
-            and self.confirm("Excluir este vínculo? A exclusão será gravada ao salvar.")
+            and self.confirm(
+                "Delete this binding? The deletion will be written when you save."
+            )
         ):
             self.document.remove(binding.token)
             self.refresh()
@@ -519,12 +517,12 @@ class KeysEditor(Gtk.Window):
 
     def open_file(self, *_):
         dialog = Gtk.FileChooserDialog(
-            title="Abrir configuração do JWM",
+            title="Open JWM configuration",
             transient_for=self,
             action=Gtk.FileChooserAction.OPEN,
         )
         dialog.add_buttons(
-            "Cancelar", Gtk.ResponseType.CANCEL, "Abrir", Gtk.ResponseType.OK
+            "Cancel", Gtk.ResponseType.CANCEL, "Open", Gtk.ResponseType.OK
         )
         dialog.set_filename(str(self.document.path))
         try:
@@ -548,19 +546,19 @@ class KeysEditor(Gtk.Window):
                     self.document.original.decode("utf-8").splitlines(keepends=True),
                     self.document.preview().splitlines(keepends=True),
                     fromfile="Original",
-                    tofile="Alterado",
+                    tofile="Changed",
                 )
             )
         except (ValueError, ET.ParseError) as exc:
             self.message(str(exc))
             return
-        dialog = Gtk.Dialog(title="Alterações no XML", transient_for=self, modal=True)
+        dialog = Gtk.Dialog(title="XML changes", transient_for=self, modal=True)
         dialog.set_default_size(800, 480)
-        dialog.add_button("Fechar", Gtk.ResponseType.CLOSE)
+        dialog.add_button("Close", Gtk.ResponseType.CLOSE)
         view = Gtk.TextView()
         view.set_editable(False)
         view.set_monospace(True)
-        view.get_buffer().set_text(diff or "Nenhuma alteração.")
+        view.get_buffer().set_text(diff or "No changes.")
         scroll = Gtk.ScrolledWindow()
         scroll.add(view)
         dialog.get_content_area().add(scroll)
@@ -585,11 +583,9 @@ class KeysEditor(Gtk.Window):
                 ["jwm", "-restart"], capture_output=True, text=True, timeout=10
             )
             if result.returncode:
-                raise RuntimeError(result.stderr or f"jwm retornou {result.returncode}")
+                raise RuntimeError(result.stderr or f"jwm returned {result.returncode}")
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
-            self.message(
-                "Arquivo salvo, mas não foi possível reiniciar o JWM:\n" + str(exc)
-            )
+            self.message("File saved, but JWM could not be restarted:\n" + str(exc))
 
 
 def main():
@@ -597,7 +593,7 @@ def main():
     from .. import __version__
 
     parser = argparse.ArgumentParser(
-        description="Edita vínculos de teclado e mouse do JWM."
+        description="Edit JWM keyboard and mouse bindings."
     )
     parser.add_argument("configuration", nargs="?", default=str(Path.home() / ".jwmrc"))
     parser.add_argument(

@@ -1,1 +1,1 @@
-"""Editor de vínculos de teclado e mouse do JWM."""
+"""JWM keyboard and mouse binding editor."""

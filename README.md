@@ -1,48 +1,49 @@
 # JWM Tools
 
-Ferramentas para o JWM em Linux/X11.
+Tools for JWM on Linux/X11. All interfaces use English.
 
-| Ferramenta | Função | Uso |
+| Tool | Function | Usage |
 | --- | --- | --- |
-| `jwm_audio` | Volume geral, volume por aplicativo e seleção de saída e microfone. | `jwm_audio` |
-| `jwm_menu` | Gera `~/.jwm-menu` a partir dos aplicativos instalados. | `jwm_menu` |
-| `jwm_ram` | Indicadores de RAM, swap, CPU, temperatura e bateria para a bandeja. | `jwm_ram --width 72 --height 30` |
-| `jwm_style` | Edita cores, fontes e decorações do JWM, com prévia e estilos pessoais. | `jwm_style ~/.jwmrc` |
-| `jwm_keys` | Edita atalhos de teclado e vínculos do mouse, com backup do arquivo. | `jwm_keys ~/.jwmrc` |
-| `jwm_startup` | Gerencia comandos de início, reinício e encerramento da sessão. | `jwm_startup ~/.jwmrc` |
+| `jwm_audio` | Master and application volume, output and microphone selection. | `jwm_audio` |
+| `jwm_menu` | Generates `~/.jwm-menu` from installed applications. | `jwm_menu` |
+| `jwm_ram` | RAM, swap, CPU, temperature and battery indicators for the tray. | `jwm_ram --width 72 --height 30` |
+| `jwm_style` | Edits JWM colors, fonts and decorations, with a preview and saved styles. | `jwm_style ~/.jwmrc` |
+| `jwm_keys` | Edits keyboard shortcuts and mouse bindings, with file backups. | `jwm_keys ~/.jwmrc` |
+| `jwm_startup` | Edits and reorders session startup, restart and shutdown commands. | `jwm_startup ~/.jwmrc` |
 
-## Instalação
+## Installation
 
-Baixe o `.deb` em [Releases](https://github.com/lucianobianc/JWM-Tools/releases):
+Download the `.deb` from [Releases](https://github.com/lucianobianc/JWM-Tools/releases):
 
 ```sh
-sudo apt install ./jwm-tools_0.1.1-1_all.deb
+sudo apt install ./jwm-tools_0.1-1_all.deb
 ```
 
-O pacote contém as seis ferramentas. O áudio usa PulseAudio ou PipeWire com suporte a PulseAudio.
+The package contains all six tools. Audio requires PulseAudio or PipeWire with PulseAudio support.
 
-## Pelo código-fonte
+## From source
 
-No Debian e derivados:
+Download and extract GitHub's **Source code (tar.gz)** or **Source code (zip)**.
+On Debian and derivatives, run these commands from the extracted directory:
 
 ```sh
 sudo apt install python3 python3-gi python3-gi-cairo python3-cairo python3-tk python3-pulsectl gir1.2-gtk-3.0 libfontconfig1 jwm
 python3 tools/install.py
 ```
 
-Os comandos ficam em `~/.local/bin`. Essa pasta precisa estar no seu `PATH`.
-Use `--help` em cada comando para ver as opções.
+Commands are installed in `~/.local/bin`, which must be in your `PATH`.
+Run each command with `--help` for its options.
 
-[Configuração e nomes anteriores](docs/usage.md) · [Editor de estilos](docs/style.md) · [Editor de atalhos](docs/keys.md) · [Comandos da sessão](docs/startup.md)
+[Configuration and previous names](docs/usage.md) · [Style editor](docs/style.md) · [Binding editor](docs/keys.md) · [Session commands](docs/startup.md)
 
-## Desenvolvimento
+## Development
 
 ```sh
 python3 tools/build_release.py
 python3 -m unittest discover -s tests -v
 ```
 
-Os arquivos de distribuição ficam em `dist/`. Os testes gráficos precisam de X11;
-as comparações com JWM real usam `JWM_REAL_TESTS=1`, `Xvfb` e `xwininfo`.
+Build artifacts are written to `dist/`. GUI tests require X11.
+Tests against a real JWM session use `JWM_REAL_TESTS=1`, `Xvfb` and `xwininfo`.
 
-Licença: [GPL v2](LICENSE).
+License: [GPL v2](LICENSE).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Editor de estilos do JWM."""
+"""JWM style editor."""
 import sys
 from pathlib import Path
 

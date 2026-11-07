@@ -123,7 +123,7 @@ class KeysUITests(unittest.TestCase):
     def test_conflict_visible_without_implicit_overwrite(self):
         self.window.document.add("Key", {"mask": "1", "key": "F4"}, "none")
         self.window.refresh()
-        self.assertIn("conflito", self.window.status.get_text())
+        self.assertIn("conflicting", self.window.status.get_text())
         self.assertEqual(len(self.window.document.entries()), 4)
         self.assertEqual(self.path.read_text(), self.original)
 
@@ -158,5 +158,5 @@ class KeysUITests(unittest.TestCase):
             "jwm_tools.keys.editor.subprocess.run", side_effect=OSError("not running")
         ), patch.object(self.window, "message") as message:
             self.window.apply()
-            self.assertIn("Arquivo salvo", message.call_args.args[0])
+            self.assertIn("File saved", message.call_args.args[0])
         self.assertFalse(self.window.document.dirty)

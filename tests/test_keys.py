@@ -201,10 +201,10 @@ class BindingTests(unittest.TestCase):
         self.assertNotEqual(a.signatures(), b.signatures())
 
     def test_button_labels_follow_jwm_double_click_multiplier(self):
-        self.assertEqual(mouse_label("11"), "Duplo esquerdo")
-        self.assertEqual(mouse_label("22"), "Duplo central")
-        self.assertEqual(mouse_label("33"), "Duplo direito")
-        self.assertEqual(mouse_label("-1"), "Soltar esquerdo")
+        self.assertEqual(mouse_label("11"), "Double left")
+        self.assertEqual(mouse_label("22"), "Double middle")
+        self.assertEqual(mouse_label("33"), "Double right")
+        self.assertEqual(mouse_label("-1"), "Release left")
 
     def test_validation_rejects_invalid_shortcuts_and_actions(self):
         cases = [

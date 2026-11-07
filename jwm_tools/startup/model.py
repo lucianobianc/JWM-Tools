@@ -19,14 +19,14 @@ from ..xmlutil import (
 )
 
 PHASES = {
-    "StartupCommand": "Início de sessão",
-    "RestartCommand": "Reinício do JWM",
-    "ShutdownCommand": "Encerramento",
+    "StartupCommand": "Session startup",
+    "RestartCommand": "JWM restart",
+    "ShutdownCommand": "Shutdown",
 }
 HINTS = {
-    "StartupCommand": "Executado ao iniciar uma nova sessão do JWM. Reiniciar o gerenciador não executa estes comandos novamente.",
-    "RestartCommand": "Executado após reiniciar o JWM. Os aplicativos que já estavam abertos não são encerrados automaticamente.",
-    "ShutdownCommand": "Executado ao encerrar o JWM, sem reinício.",
+    "StartupCommand": "Runs when a new JWM session starts. Restarting the window manager does not run these commands again.",
+    "RestartCommand": "Runs after restarting JWM. Applications that are already open are not closed automatically.",
+    "ShutdownCommand": "Runs when JWM exits without restarting.",
 }
 MARKER = "jwm_startup:disabled "
 
@@ -50,17 +50,17 @@ class Command:
 
 def validate(command, previous=None):
     if command.kind not in PHASES:
-        raise ValueError("Escolha quando o comando deve ser executado.")
+        raise ValueError("Choose when to run the command.")
     if not command.command.strip():
-        raise ValueError("Informe um comando.")
+        raise ValueError("Enter a command.")
     if "\x00" in command.command:
-        raise ValueError("O comando contém um caractere inválido.")
+        raise ValueError("The command contains an invalid character.")
     if previous is not None and previous.command == command.command:
         return
     if "\n" in command.command or "\r" in command.command:
-        raise ValueError("Informe o comando em uma única linha.")
+        raise ValueError("Enter the command on a single line.")
     if command.command.startswith("exec:"):
-        raise ValueError("Use apenas o comando, sem o prefixo exec:.")
+        raise ValueError("Enter the command without the exec: prefix.")
 
 
 def disabled_xml(xml):
@@ -110,7 +110,7 @@ def read_commands(path, data, editable):
                 ).decode("utf-8")
             except (ValueError, UnicodeError, binascii.Error):
                 warnings.append(
-                    f"Comando desativado ilegível em {path}. O comentário foi preservado."
+                    f"Unreadable disabled command in {path}. The comment has been preserved."
                 )
                 continue
         try:
@@ -118,7 +118,7 @@ def read_commands(path, data, editable):
         except ET.ParseError:
             if content.startswith(MARKER):
                 warnings.append(
-                    f"Comando desativado inválido em {path}. O comentário foi preservado."
+                    f"Invalid disabled command in {path}. The comment has been preserved."
                 )
             continue
         if node.tag not in PHASES:
@@ -160,7 +160,7 @@ def desktop_command(line, name="", icon="", filename=""):
     try:
         args = shlex.split(line)
     except ValueError as exc:
-        raise ValueError("Comando do aplicativo inválido: " + str(exc)) from exc
+        raise ValueError("Invalid application command: " + str(exc)) from exc
     result = []
     for arg in args:
         if arg == "%i":
@@ -178,13 +178,13 @@ def desktop_command(line, name="", icon="", filename=""):
                 return name
             if code == "k":
                 return filename
-            raise ValueError("Campo não suportado no comando do aplicativo: %" + code)
+            raise ValueError("Unsupported application command field: %" + code)
 
         value = re.sub(r"%(.)", field, arg)
         if value:
             result.append(value)
     if not result:
-        raise ValueError("O aplicativo não tem um comando para iniciar.")
+        raise ValueError("The application has no launch command.")
     return shlex.join(result)
 
 
@@ -212,21 +212,63 @@ class StartupDocument:
         self.changes = {}
         self.additions = []
         self.next_id = 0
+        self.order = [c.token for c in self.local]
+
+    @property
+    def reordered(self):
+        baseline = [
+            c.token for c in self.local if self.changes.get(c.token, c) is not None
+        ]
+        baseline += [c.token for c in self.additions]
+        return self.order != baseline
 
     @property
     def dirty(self):
-        return bool(self.changes or self.additions)
+        return bool(self.changes or self.additions or self.reordered)
 
     def entries(self):
-        return (
-            [
-                self.changes.get(c.token, c)
-                for c in self.local
-                if self.changes.get(c.token, c) is not None
-            ]
-            + self.additions
-            + self.included
-        )
+        current = {c.token: self.changes.get(c.token, c) for c in self.local}
+        current.update({c.token: c for c in self.additions})
+        return [current[token] for token in self.order] + self.included
+
+    def move_target(self, token, direction):
+        if direction not in (-1, 1):
+            raise ValueError("Direction must be -1 or 1.")
+        command = self.get(token)
+        if not command.editable:
+            return None
+        index = self.order.index(token)
+        target = index + direction
+        while 0 <= target < len(self.order):
+            other = self.get(self.order[target])
+            if other.kind == command.kind:
+                # Moving past an Include would also change the relationship to
+                # commands owned by another file. Require opening that origin.
+                slots = [
+                    c.span[0]
+                    for c in self.local
+                    if self.changes.get(c.token, c) is not None
+                ]
+                slots += [len(self.original)] * len(self.additions)
+                lo, hi = sorted((slots[index], slots[target]))
+                text = self.original.decode("utf-8")
+                if any(
+                    lo < span[0] < hi
+                    for span in find_elements(text, "Include")
+                    if span[4] == 1
+                ):
+                    return None
+                return target
+            target += direction
+        return None
+
+    def move(self, token, direction):
+        target = self.move_target(token, direction)
+        if target is None:
+            return False
+        index = self.order.index(token)
+        self.order[index], self.order[target] = self.order[target], self.order[index]
+        return True
 
     def get(self, token):
         return next(c for c in self.entries() if c.token == token)
@@ -236,12 +278,13 @@ class StartupDocument:
         validate(item)
         self.next_id += 1
         self.additions.append(item)
+        self.order.append(item.token)
         return item
 
     def update(self, token, kind, command, enabled):
         current = self.get(token)
         if not current.editable:
-            raise ValueError("Abra o arquivo de origem para editar este comando.")
+            raise ValueError("Open the source file to edit this command.")
         candidate = replace(current, kind=kind, command=command, enabled=enabled)
         validate(candidate, current)
         if token.startswith("N"):
@@ -263,7 +306,8 @@ class StartupDocument:
     def remove(self, token):
         command = self.get(token)
         if not command.editable:
-            raise ValueError("Abra o arquivo de origem para excluir este comando.")
+            raise ValueError("Open the source file to delete this command.")
+        self.order.remove(token)
         if token.startswith("N"):
             self.additions = [c for c in self.additions if c.token != token]
         else:
@@ -272,6 +316,7 @@ class StartupDocument:
     def reset(self):
         self.changes.clear()
         self.additions.clear()
+        self.order = [c.token for c in self.local]
 
     def duplicates(self, candidate=None, exclude=None):
         groups = {}
@@ -291,31 +336,42 @@ class StartupDocument:
 
     def preview(self):
         text = self.original.decode("utf-8")
-        for original in reversed(self.local):
-            if original.token not in self.changes:
-                continue
-            changed = self.changes[original.token]
-            node = "" if changed is None else changed_xml(changed, original)
-            a, b = original.span[:2]
-            text = text[:a] + node + text[b:]
-        additions = []
-        for command in self.additions:
-            node = serialize(command)
-            additions.append(node if command.enabled else disabled_xml(node))
-        text = append_nodes(text, additions)
+        originals = {c.token: c for c in self.local}
+        nodes = []
+        for token in self.order:
+            command = self.get(token)
+            original = originals.get(token)
+            if original is None:
+                node = serialize(command)
+                node = node if command.enabled else disabled_xml(node)
+            elif token in self.changes:
+                node = changed_xml(command, original)
+            else:
+                node = text[original.span[0] : original.span[1]]
+            nodes.append(node)
+        replacements = []
+        for original in self.local:
+            if self.changes.get(original.token, original) is None:
+                node = ""
+            else:
+                node = nodes.pop(0)
+            replacements.append((*original.span[:2], node))
+        for start, end, node in reversed(replacements):
+            text = text[:start] + node + text[end:]
+        text = append_nodes(text, nodes)
         ET.fromstring(text)
         return text
 
     def save(self):
         if not self.config.unchanged():
             raise ValueError(
-                "A configuração ou um Include mudou no disco. Recarregue antes de salvar."
+                "The configuration or an Include changed on disk. Reload before saving."
             )
         data = self.preview().encode("utf-8")
         if data != self.original:
             if not self.config.unchanged():
                 raise ValueError(
-                    "A configuração mudou enquanto as alterações eram preparadas."
+                    "The configuration changed while preparing the changes."
                 )
             save_atomic(self.path.with_name(self.path.name + ".bak"), self.original)
             save_atomic(self.path, data)

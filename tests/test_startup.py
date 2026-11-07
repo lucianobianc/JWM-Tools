@@ -144,3 +144,45 @@ class StartupTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             desktop_command("app %X")
+
+    def test_move_preserves_xml_and_reversing_move_clears_dirty(self):
+        xml = '<JWM>\r\n<StartupCommand extra="1">one</StartupCommand><!--keep--><Key key="F1">close</Key><RestartCommand>restart</RestartCommand><StartupCommand extra="2">two</StartupCommand></JWM>'
+        doc = self.document(xml)
+        self.assertTrue(doc.move("L2", -1))
+        self.assertEqual([c.command for c in doc.entries()], ["two", "restart", "one"])
+        self.assertTrue(doc.dirty)
+        self.assertIn('<!--keep--><Key key="F1">close</Key>', doc.preview())
+        self.assertTrue(doc.move("L2", 1))
+        self.assertFalse(doc.dirty)
+        self.assertEqual(doc.preview(), xml)
+
+    def test_move_save_reload_with_new_disabled_and_edited(self):
+        doc = self.document(
+            "<JWM><StartupCommand>one</StartupCommand><StartupCommand>two</StartupCommand></JWM>"
+        )
+        new = doc.add("StartupCommand", "three", False)
+        doc.move(new.token, -1)
+        doc.move(new.token, -1)
+        doc.update("L1", "StartupCommand", "edited", True)
+        doc.save()
+        self.assertEqual(
+            [(c.command, c.enabled) for c in doc.entries()],
+            [("three", False), ("one", True), ("edited", True)],
+        )
+        self.assertFalse(doc.dirty)
+        doc.remove("L1")
+        doc.move("L2", -1)
+        doc.save()
+        self.assertEqual([c.command for c in doc.entries()], ["edited", "three"])
+
+    def test_move_bounds_includes_and_readonly(self):
+        inc = self.path.with_name("include")
+        inc.write_text("<JWM><StartupCommand>included</StartupCommand></JWM>")
+        doc = self.document(
+            f"<JWM><StartupCommand>one</StartupCommand><Include>{inc}</Include><StartupCommand>two</StartupCommand></JWM>"
+        )
+        self.assertFalse(doc.move("L0", -1))
+        self.assertFalse(doc.move("L1", 1))
+        self.assertFalse(doc.move("L0", 1))
+        self.assertFalse(doc.move("I0", -1))
+        self.assertFalse(doc.dirty)

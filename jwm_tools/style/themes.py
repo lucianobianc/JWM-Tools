@@ -1,4 +1,4 @@
-"""Armazenamento dos estilos salvos pelo usuário."""
+"""Storage for user-saved styles."""
 
 import os
 import json

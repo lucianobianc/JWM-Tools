@@ -2,7 +2,6 @@
 Type=Application
 Name=jwm_audio
 Comment=Audio mixer for the system tray
-Comment[pt_BR]=Mixer de áudio para a bandeja
 Exec=jwm_audio
 Icon=multimedia-volume-control
 Terminal=false

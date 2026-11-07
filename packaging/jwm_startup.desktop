@@ -2,7 +2,6 @@
 Type=Application
 Name=jwm_startup
 Comment=Manage JWM session commands
-Comment[pt_BR]=Gerencie os comandos da sessão do JWM
 Exec=jwm_startup
 Icon=preferences-system-session
 Terminal=false

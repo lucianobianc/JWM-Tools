@@ -52,7 +52,7 @@ class StartupUITests(unittest.TestCase):
         dialog = CommandDialog(self.window)
         try:
             dialog.kind.set_active_id("ShutdownCommand")
-            self.assertIn("encerrar", dialog.hint.get_text())
+            self.assertIn("exits", dialog.hint.get_text())
             with patch("jwm_tools.startup.editor.Gtk.FileChooserDialog") as factory:
                 factory.return_value.run.return_value = Gtk.ResponseType.OK
                 factory.return_value.get_filename.return_value = "/tmp/my script"
@@ -77,3 +77,25 @@ class StartupUITests(unittest.TestCase):
             message.assert_called_once()
         self.assertTrue(self.window.document.dirty)
         self.assertEqual(self.path.read_text(), "<JWM/>")
+
+    def test_move_buttons_follow_selection_save_and_filtered_view(self):
+        self.window.document.add("StartupCommand", "second")
+        self.window.refresh("N0")
+        self.assertTrue(self.window.up_button.get_sensitive())
+        self.assertFalse(self.window.down_button.get_sensitive())
+        self.window.up_button.clicked()
+        self.assertEqual(self.window.selected().token, "N0")
+        self.assertFalse(self.window.up_button.get_sensitive())
+        self.assertTrue(self.window.down_button.get_sensitive())
+        self.assertEqual(
+            [c.command for c in self.window.document.entries()],
+            ["second", "jwm_menu", "jwm_audio"],
+        )
+        self.window.phase.set_active_id("StartupCommand")
+        self.window.down_button.clicked()
+        self.assertEqual(self.window.selected().token, "N0")
+        self.window.save()
+        self.assertEqual(
+            [c.command for c in self.window.document.entries()],
+            ["jwm_audio", "jwm_menu", "second"],
+        )

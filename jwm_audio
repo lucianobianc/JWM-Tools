@@ -9,6 +9,8 @@ import os
 import threading
 import time
 
+from jwm_tools import __version__
+
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
@@ -44,7 +46,7 @@ class VolumeRow:
         self.mute = False
         self.dragging = False
         self.root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.mute_button = make_button(icon, 'Silenciar / ativar', self._mute)
+        self.mute_button = make_button(icon, 'Mute / unmute', self._mute)
         self.root.pack_start(self.mute_button, False, False, 0)
         self.scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, max_volume, 1)
         self.scale.set_draw_value(False)
@@ -101,7 +103,7 @@ class VolumeRow:
                     'audio-volume-medium-symbolic' if value <= 66 else
                     'audio-volume-high-symbolic')))
         self.mute_button.set_image(Gtk.Image.new_from_icon_name(symbol, Gtk.IconSize.BUTTON))
-        self.mute_button.set_tooltip_text('Ativar' if self.mute else 'Silenciar')
+        self.mute_button.set_tooltip_text('Unmute' if self.mute else 'Mute')
 
 
 class AudioTray:
@@ -179,13 +181,13 @@ class AudioTray:
         self.master_mute = make_button('audio-volume-high-symbolic', 'Mute', self.toggle_master_mute)
         side.pack_start(self.master_mute, False, False, 0)
 
-        self.out_label = Gtk.Label(label='Sem saída')
+        self.out_label = Gtk.Label(label='No output')
         self.out_label.set_line_wrap(True)
         self.out_label.set_max_width_chars(24)
         self.out_label.set_ellipsize(3)
         primary.pack_start(self.out_label, False, False, 0)
 
-        mixer_button = Gtk.Button(label='Abrir mixer…')
+        mixer_button = Gtk.Button(label='Open mixer…')
         mixer_button.connect('clicked', self.open_mixer)
         primary.pack_start(mixer_button, False, False, 0)
 
@@ -203,7 +205,7 @@ class AudioTray:
         self.mixer.add(content)
 
         label = Gtk.Label()
-        label.set_markup('<b>Volume principal</b>')
+        label.set_markup('<b>Master volume</b>')
         label.set_xalign(0)
         content.pack_start(label, False, False, 0)
         self.mixer_master = VolumeRow(self.args.max_volume, self.set_master_volume,
@@ -211,7 +213,7 @@ class AudioTray:
         content.pack_start(self.mixer_master.root, False, False, 0)
 
         label = Gtk.Label()
-        label.set_markup('<b>Aplicativos</b>')
+        label.set_markup('<b>Applications</b>')
         label.set_xalign(0)
         content.pack_start(label, False, False, 0)
         self.stream_scroller = Gtk.ScrolledWindow()
@@ -226,7 +228,7 @@ class AudioTray:
         self.stream_scroller.add(self.stream_box)
 
         label = Gtk.Label()
-        label.set_markup('<b>Saída</b>')
+        label.set_markup('<b>Output</b>')
         label.set_xalign(0)
         content.pack_start(label, False, False, 0)
         self.output_combo = Gtk.ComboBoxText()
@@ -237,7 +239,7 @@ class AudioTray:
         content.pack_start(self.output_port, False, False, 0)
 
         label = Gtk.Label()
-        label.set_markup('<b>Microfone</b>')
+        label.set_markup('<b>Microphone</b>')
         label.set_xalign(0)
         content.pack_start(label, False, False, 0)
         self.input_combo = Gtk.ComboBoxText()
@@ -308,7 +310,7 @@ class AudioTray:
             self.streams = {s.index: s for s in self.pulse.sink_input_list()}
         except (pulsectl.PulseError, OSError) as exc:
             LOG.warning('Could not update audio state: %s', exc)
-            self.tray.set_tooltip_text('PulseAudio indisponível')
+            self.tray.set_tooltip_text('PulseAudio unavailable')
             return
         self.sink = self.sinks.get(self.server.default_sink_name)
         self.source = self.sources.get(self.server.default_source_name)
@@ -317,7 +319,7 @@ class AudioTray:
             muted = bool(self.sink.mute)
             name = friendly(self.sink)
             self.tray.set_from_icon_name(self.volume_icon(vol, muted))
-            self.tray.set_tooltip_text(f'{name}: {vol}%'+ (' (mudo)' if muted else ''))
+            self.tray.set_tooltip_text(f'{name}: {vol}%'+ (' (muted)' if muted else ''))
             self.out_label.set_text(name)
             self.value_label.set_text(f'{vol}%')
             context = self.vertical.get_style_context()
@@ -330,8 +332,8 @@ class AudioTray:
                 self.master_updating = False
         else:
             self.tray.set_from_icon_name('audio-volume-muted')
-            self.tray.set_tooltip_text('Nenhuma saída de áudio')
-            self.out_label.set_text('Sem saída')
+            self.tray.set_tooltip_text('No audio output')
+            self.out_label.set_text('No output')
             self.value_label.set_text('—')
         self.vertical.set_sensitive(bool(self.sink))
         self.master_mute.set_sensitive(bool(self.sink))
@@ -556,7 +558,7 @@ class AudioTray:
                               next((s.name for s in self.sinks.values() if s.index == stream.sink), None))
         if not self.streams:
             if not hasattr(self, 'no_streams'):
-                self.no_streams = Gtk.Label(label='Nenhum aplicativo reproduzindo áudio')
+                self.no_streams = Gtk.Label(label='No applications playing audio')
                 self.no_streams.set_line_wrap(True)
                 self.stream_box.pack_start(self.no_streams, False, False, 0)
             self.no_streams.show()
@@ -566,7 +568,7 @@ class AudioTray:
     @staticmethod
     def stream_name(stream):
         props = stream.proplist or {}
-        return props.get('application.name') or stream.name or 'Aplicativo'
+        return props.get('application.name') or stream.name or 'Application'
 
     @staticmethod
     def stream_icon(stream):
@@ -652,10 +654,10 @@ class AudioTray:
 
     def context_menu(self, _icon, button, timestamp):
         menu = Gtk.Menu()
-        show = Gtk.MenuItem(label='Abrir mixer')
+        show = Gtk.MenuItem(label='Open mixer')
         show.connect('activate', lambda *_: self.open_mixer())
         menu.append(show)
-        quit_item = Gtk.MenuItem(label='Sair')
+        quit_item = Gtk.MenuItem(label='Quit')
         quit_item.connect('activate', self.quit)
         menu.append(quit_item)
         menu.show_all()
@@ -680,7 +682,6 @@ class AudioTray:
 
 
 def parse_args():
-    from jwm_tools import __version__
     ap = argparse.ArgumentParser(description='GTK3 systray mixer for PulseAudio on X11')
     ap.add_argument('--version', action='version', version='jwm_audio ' + __version__)
     ap.add_argument('--max-volume', type=int, default=150, help='Maximum volume percent (default 150)')
@@ -702,7 +703,7 @@ def main():
     args = parse_args()
     Gtk.Settings.get_default().set_property('gtk-application-prefer-dark-theme', args.dark_mode if args.dark_mode or args.light_mode else False)
     try:
-        app = AudioTray(args)
+        AudioTray(args)
     except (pulsectl.PulseError, OSError) as exc:
         raise SystemExit(f'Cannot connect to PulseAudio: {exc}')
     Gtk.main()

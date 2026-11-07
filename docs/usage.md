@@ -1,14 +1,14 @@
-# Configuração
+# Configuration
 
 ## jwm_audio
 
-Execute `jwm_audio` em uma sessão com bandeja de sistema e servidor PulseAudio,
-ou PipeWire com `pipewire-pulse`. Clique no ícone para abrir o controle rápido;
-use “Abrir mixer” para ajustar os aplicativos.
+Run `jwm_audio` in a session with a system tray and PulseAudio, or PipeWire with
+`pipewire-pulse`. Click the icon for quick volume control; use **Open mixer** to
+adjust individual applications.
 
 ## jwm_menu
 
-Execute `jwm_menu` para atualizar `~/.jwm-menu`. Inclua o arquivo no menu do JWM:
+Run `jwm_menu` to update `~/.jwm-menu`. Include it in the JWM menu:
 
 ```xml
 <RootMenu>
@@ -18,7 +18,7 @@ Execute `jwm_menu` para atualizar `~/.jwm-menu`. Inclua o arquivo no menu do JWM
 
 ## jwm_ram
 
-Para colocar o indicador na bandeja do JWM:
+To place the resource indicator in the JWM tray:
 
 ```xml
 <Tray>
@@ -28,33 +28,33 @@ Para colocar o indicador na bandeja do JWM:
 
 ## jwm_style
 
-Execute `jwm_style ~/.jwmrc`. O editor usa a configuração aberta e os estilos
-que você salvar; não inclui presets internos.
+Run `jwm_style ~/.jwmrc`. The editor uses the open configuration and styles you
+save; it has no built-in presets. See [Style editor](style.md).
 
 ## jwm_keys
 
-Execute `jwm_keys ~/.jwmrc` para editar vínculos de teclado e mouse.
-Vínculos de Includes mostram o arquivo de origem. Consulte [o editor de atalhos](keys.md).
+Run `jwm_keys` to edit keyboard and mouse bindings in `~/.jwmrc`, or pass another
+configuration file. Included entries display their source file.
+See [Binding editor](keys.md).
 
-## Mudança de nomes
+## jwm_startup
 
-| Anterior | Atual |
+Run `jwm_startup` to edit and reorder session commands in `~/.jwmrc`, or pass
+another configuration file. See [Session commands](startup.md).
+
+## Previous names
+
+| Previous | Current |
 | --- | --- |
 | `audiotray` | `jwm_audio` |
 | `jwm-menu-gen` | `jwm_menu` |
 | `jwm-ram` | `jwm_ram` |
 | `jwm-style-editor` | `jwm_style` |
 
-Atualize atalhos, autostart e o nome do `Swallow` para os comandos novos.
-O menu continua em `~/.jwm-menu`. Os estilos pessoais continuam em
-`~/.config/jwm-style-editor/styles/`, ou no caminho equivalente de
-`XDG_CONFIG_HOME`.
+Update shortcuts, startup commands and `Swallow` names. The menu remains at
+`~/.jwm-menu`. Personal styles remain at `~/.config/jwm-style-editor/styles/`,
+or the equivalent path under `XDG_CONFIG_HOME`.
 
-O pacote Debian `jwm-tools` substitui o antigo `jwm-style-editor`. A versão 0.1
-marca a primeira distribuição conjunta das quatro ferramentas.
-
-## jwm_startup
-
-Execute `jwm_startup` para editar os comandos da sessão em `~/.jwmrc`.
-Também aceita outro arquivo: `jwm_startup /caminho/jwmrc`.
-Consulte [Comandos da sessão](startup.md).
+The `jwm-tools` Debian package replaces the old `jwm-style-editor` package.
+All six tools use English, including GTK stock labels. This does not translate
+user-provided commands, filenames, device descriptions or saved style names.

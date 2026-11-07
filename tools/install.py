@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Instala os comandos no diretório do usuário."""
+"""Install the commands in the user directory."""
 import argparse
 import json
 from pathlib import Path
@@ -17,12 +17,14 @@ def install(prefix):
     bin_dir = prefix / "bin"
     marker = app / "install.json"
     if app.is_symlink() or (app.exists() and not marker.is_file()):
-        raise ValueError(f"Diretório existente não pertence a esta instalação: {app}")
+        raise ValueError(
+            f"Existing directory does not belong to this installation: {app}"
+        )
     for command in COMMANDS:
         link = bin_dir / command
         if link.exists() or link.is_symlink():
             if not link.is_symlink() or link.resolve() != app / command:
-                raise ValueError(f"Comando existente não será substituído: {link}")
+                raise ValueError(f"Existing command will not be replaced: {link}")
     app.mkdir(parents=True, exist_ok=True)
     bin_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(
@@ -38,7 +40,7 @@ def install(prefix):
         if not link.is_symlink():
             link.symlink_to(app / command)
     marker.write_text(json.dumps({"commands": list(COMMANDS)}) + "\n")
-    print(f"Comandos instalados em {bin_dir}")
+    print(f"Commands installed in {bin_dir}")
 
 
 def main():

@@ -19,13 +19,13 @@ from ..xmlutil import (
 )
 
 CONTEXTS = {
-    "root": "Área de trabalho",
-    "title": "Título",
-    "border": "Borda",
-    "icon": "Ícone da janela",
-    "close": "Fechar",
-    "maximize": "Maximizar",
-    "minimize": "Minimizar",
+    "root": "Desktop",
+    "title": "Title",
+    "border": "Border",
+    "icon": "Window icon",
+    "close": "Close",
+    "maximize": "Maximize",
+    "minimize": "Minimize",
 }
 MODIFIERS = {
     "C": "Ctrl",
@@ -54,7 +54,7 @@ def keysym(name):
 def normalize_mask(mask):
     chars = set(mask.replace("1", "A"))
     if chars - set(MODIFIERS):
-        raise ValueError("Modificadores válidos: C, S, A (ou 1), 2, 3, 4 e 5.")
+        raise ValueError("Valid modifiers: C, S, A (or 1), 2, 3, 4 and 5.")
     return "".join(char for char in MODIFIERS if char in chars)
 
 
@@ -64,45 +64,45 @@ def validate(binding, previous=None):
     if binding.kind == "Key":
         key, code = attrs.get("key", ""), attrs.get("keycode", "")
         if bool(key) == bool(code):
-            raise ValueError("Informe uma tecla ou um keycode, não os dois.")
+            raise ValueError("Enter either a key or a keycode, not both.")
         if code:
             if not code.isdecimal() or not 8 <= int(code) <= 255:
-                raise ValueError("O keycode X11 deve estar entre 8 e 255.")
+                raise ValueError("X11 keycodes must be between 8 and 255.")
         else:
             if key.count("#") > 1:
-                raise ValueError("Use apenas um # na sequência de teclas.")
+                raise ValueError("Use only one # in a key sequence.")
             names = (
                 [key.replace("#", str(n)) for n in range(1, 10)]
                 if "#" in key
                 else [key]
             )
             if any(not keysym(name) for name in names):
-                raise ValueError("Nome de tecla X11 inválido: " + key)
+                raise ValueError("Invalid X11 key name: " + key)
             if "#" in key and binding.action not in ("desktop#", "send#", "at#"):
-                raise ValueError("Teclas com # exigem desktop#, send# ou at#.")
+                raise ValueError("Keys containing # require desktop#, send# or at#.")
     elif binding.kind == "Mouse":
         try:
             button = int(attrs.get("button", ""))
         except ValueError:
-            raise ValueError("Informe um código de botão numérico.") from None
+            raise ValueError("Enter a numeric button code.") from None
         valid_button = (
             -255 <= button <= -1
             or 1 <= button <= 255
             or (button > 255 and button % 11 == 0 and button // 11 <= 255)
         )
         if not valid_button:
-            raise ValueError("Código de botão inválido.")
+            raise ValueError("Invalid button code.")
         if attrs.get("context") not in CONTEXTS:
-            raise ValueError("Escolha um contexto válido para o mouse.")
+            raise ValueError("Choose a valid mouse context.")
     else:
-        raise ValueError("Tipo de vínculo inválido.")
+        raise ValueError("Invalid binding type.")
     action = binding.action
     if not action:
-        raise ValueError("Informe uma ação.")
+        raise ValueError("Enter an action.")
     if previous is not None and previous.action == action:
         return
     if "\n" in action or "\r" in action:
-        raise ValueError("Informe uma ação em uma única linha.")
+        raise ValueError("Enter the action on a single line.")
     if action in ACTIONS:
         return
     if action.startswith("exec:") and action[5:].strip():
@@ -111,7 +111,7 @@ def validate(binding, previous=None):
         return
     if re.fullmatch(r"resize:[nsew]+", action):
         return
-    raise ValueError("Ação inválida. Use uma ação do JWM ou exec:comando.")
+    raise ValueError("Invalid action. Use a JWM action or exec:command.")
 
 
 @dataclass
@@ -172,25 +172,25 @@ class Binding:
 
 def mouse_label(code):
     names = {
-        1: "Esquerdo",
-        2: "Central",
-        3: "Direito",
-        4: "Roda para cima",
-        5: "Roda para baixo",
-        6: "Roda para esquerda",
-        7: "Roda para direita",
-        8: "Voltar",
-        9: "Avançar",
+        1: "Left",
+        2: "Middle",
+        3: "Right",
+        4: "Scroll up",
+        5: "Scroll down",
+        6: "Scroll left",
+        7: "Scroll right",
+        8: "Back",
+        9: "Forward",
     }
     try:
         value = int(code)
     except ValueError:
         return code
     if value < 0:
-        return "Soltar " + names.get(-value, str(-value)).lower()
+        return "Release " + names.get(-value, str(-value)).lower()
     if value % 11 == 0 and value // 11 in names:
-        return "Duplo " + names[value // 11].lower()
-    return names.get(value, "Botão " + str(value))
+        return "Double " + names[value // 11].lower()
+    return names.get(value, "Button " + str(value))
 
 
 def read_bindings(path, data, editable):
@@ -275,7 +275,7 @@ class BindingDocument:
     def update(self, token, attrs, action):
         current = self.get(token)
         if not current.editable:
-            raise ValueError("Abra o arquivo de origem para editar esse vínculo.")
+            raise ValueError("Open the source file to edit this binding.")
         candidate = replace(current, attrs=dict(attrs), action=action)
         validate(candidate, current)
         if token.startswith("N"):
@@ -296,7 +296,7 @@ class BindingDocument:
     def remove(self, token):
         binding = self.get(token)
         if not binding.editable:
-            raise ValueError("Abra o arquivo de origem para excluir esse vínculo.")
+            raise ValueError("Open the source file to delete this binding.")
         if token.startswith("N"):
             self.additions = [b for b in self.additions if b.token != token]
         else:
@@ -341,13 +341,13 @@ class BindingDocument:
     def save(self):
         if not self.config.unchanged():
             raise ValueError(
-                "A configuração ou um Include mudou no disco. Recarregue o arquivo antes de salvar."
+                "The configuration or an Include changed on disk. Reload before saving."
             )
         data = self.preview().encode("utf-8")
         if data != self.original:
             if not self.config.unchanged():
                 raise ValueError(
-                    "A configuração mudou enquanto as alterações eram preparadas."
+                    "The configuration changed while preparing the changes."
                 )
             save_atomic(self.path.with_name(self.path.name + ".bak"), self.original)
             save_atomic(self.path, data)

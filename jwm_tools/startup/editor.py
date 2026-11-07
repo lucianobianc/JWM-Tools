@@ -21,16 +21,16 @@ def combo(items, current):
 
 class ApplicationDialog(Gtk.Dialog):
     def __init__(self, parent):
-        super().__init__(title="Escolher aplicativo", transient_for=parent, modal=True)
+        super().__init__(title="Choose application", transient_for=parent, modal=True)
         self.set_default_size(680, 440)
         self.add_buttons(
-            "Cancelar", Gtk.ResponseType.CANCEL, "Selecionar", Gtk.ResponseType.OK
+            "Cancel", Gtk.ResponseType.CANCEL, "Select", Gtk.ResponseType.OK
         )
         box = self.get_content_area()
         box.set_spacing(10)
         box.set_border_width(12)
         self.search = Gtk.SearchEntry()
-        self.search.set_placeholder_text("Buscar aplicativo")
+        self.search.set_placeholder_text("Search applications")
         box.add(self.search)
         self.store = Gtk.ListStore(object, str, str)
         for app in sorted(
@@ -46,7 +46,7 @@ class ApplicationDialog(Gtk.Dialog):
         )
         self.search.connect("search-changed", lambda *_: self.filtered.refilter())
         self.tree = Gtk.TreeView(model=self.filtered)
-        for index, title in ((1, "Aplicativo"), (2, "Comando")):
+        for index, title in ((1, "Application"), (2, "Command")):
             cell = Gtk.CellRendererText()
             cell.props.ellipsize = 3
             col = Gtk.TreeViewColumn(title, cell, text=index)
@@ -66,7 +66,7 @@ class ApplicationDialog(Gtk.Dialog):
     def command(self):
         model, it = self.tree.get_selection().get_selected()
         if it is None:
-            raise ValueError("Selecione um aplicativo.")
+            raise ValueError("Select an application.")
         app = model[it][0]
         icon = app.get_icon()
         icon_name = ""
@@ -84,7 +84,7 @@ class ApplicationDialog(Gtk.Dialog):
             ) or GLib.find_program_in_path("xterm")
             if not terminal:
                 raise ValueError(
-                    "Esse aplicativo precisa de terminal. Informe o comando com um terminal de sua escolha."
+                    "This application requires a terminal. Enter the command with your preferred terminal."
                 )
             command = shlex.quote(terminal) + " -e " + command
         return command
@@ -93,14 +93,14 @@ class ApplicationDialog(Gtk.Dialog):
 class CommandDialog(Gtk.Dialog):
     def __init__(self, parent, current=None, kind="StartupCommand"):
         super().__init__(
-            title="Editar comando" if current else "Adicionar comando",
+            title="Edit command" if current else "Add command",
             transient_for=parent,
             modal=True,
         )
         self.current = current
         self.set_default_size(650, 0)
         self.add_buttons(
-            "Cancelar", Gtk.ResponseType.CANCEL, "Confirmar", Gtk.ResponseType.OK
+            "Cancel", Gtk.ResponseType.CANCEL, "Confirm", Gtk.ResponseType.OK
         )
         box = self.get_content_area()
         box.set_spacing(12)
@@ -108,26 +108,26 @@ class CommandDialog(Gtk.Dialog):
         grid = Gtk.Grid(column_spacing=12, row_spacing=12)
         box.add(grid)
         self.kind = combo(PHASES.items(), current.kind if current else kind)
-        grid.attach(Gtk.Label(label="Quando executar", xalign=0), 0, 0, 1, 1)
+        grid.attach(Gtk.Label(label="When to run", xalign=0), 0, 0, 1, 1)
         grid.attach(self.kind, 1, 0, 1, 1)
         self.command = Gtk.Entry()
         self.command.set_text(current.command if current else "")
         self.command.set_hexpand(True)
         self.command.set_placeholder_text(
-            "Ex.: jwm_audio ou picom --config ~/.config/picom.conf"
+            "E.g. jwm_audio or picom --config ~/.config/picom.conf"
         )
-        grid.attach(Gtk.Label(label="Comando", xalign=0), 0, 1, 1, 1)
+        grid.attach(Gtk.Label(label="Command", xalign=0), 0, 1, 1, 1)
         grid.attach(self.command, 1, 1, 1, 1)
         choose = Gtk.Box(spacing=8)
         for label, callback in [
-            ("Aplicativo instalado…", self.choose_application),
-            ("Programa ou script…", self.choose_file),
+            ("Installed application…", self.choose_application),
+            ("Program or script…", self.choose_file),
         ]:
             button = Gtk.Button(label=label)
             button.connect("clicked", callback)
             choose.pack_start(button, False, False, 0)
         grid.attach(choose, 1, 2, 1, 1)
-        self.enabled = Gtk.CheckButton(label="Ativado")
+        self.enabled = Gtk.CheckButton(label="Enabled")
         self.enabled.set_active(current.enabled if current else True)
         grid.attach(self.enabled, 1, 3, 1, 1)
         self.hint = Gtk.Label(xalign=0)
@@ -137,7 +137,7 @@ class CommandDialog(Gtk.Dialog):
         self.kind.connect("changed", self.update_hint)
         self.update_hint()
         note = Gtk.Label(
-            label="Use o comando direto, sem exec:. Revise os argumentos antes de confirmar.",
+            label="Enter the command without exec:. Review its arguments before confirming.",
             xalign=0,
         )
         note.set_line_wrap(True)
@@ -153,12 +153,12 @@ class CommandDialog(Gtk.Dialog):
 
     def choose_file(self, *_):
         dialog = Gtk.FileChooserDialog(
-            title="Escolher programa ou script",
+            title="Choose program or script",
             transient_for=self,
             action=Gtk.FileChooserAction.OPEN,
         )
         dialog.add_buttons(
-            "Cancelar", Gtk.ResponseType.CANCEL, "Selecionar", Gtk.ResponseType.OK
+            "Cancel", Gtk.ResponseType.CANCEL, "Select", Gtk.ResponseType.OK
         )
         dialog.set_local_only(True)
         dialog.set_show_hidden(True)
@@ -197,19 +197,29 @@ class StartupEditor(Gtk.Window):
         self.file_label.set_ellipsize(2)
         header.pack_start(self.file_label, True, True, 0)
         for label, callback in [
-            ("Abrir…", self.open_file),
-            ("Recarregar", lambda *_: self.load(self.document.path)),
+            ("Open…", self.open_file),
+            ("Reload", lambda *_: self.load(self.document.path)),
         ]:
             button = Gtk.Button(label=label)
             button.connect("clicked", callback)
             header.pack_start(button, False, False, 0)
         controls = Gtk.Box(spacing=8)
         outer.pack_start(controls, False, False, 0)
-        self.phase = combo([("all", "Todos"), *PHASES.items()], "all")
+        self.phase = combo([("all", "All"), *PHASES.items()], "all")
         self.phase.connect("changed", self.refilter)
         controls.pack_start(self.phase, False, False, 0)
+        self.up_button = Gtk.Button(label="Move up")
+        self.down_button = Gtk.Button(label="Move down")
+        for button, direction in ((self.up_button, -1), (self.down_button, 1)):
+            button.connect(
+                "clicked", lambda _button, step=direction: self.move_selected(step)
+            )
+            button.set_tooltip_text(
+                "Move within the same event and file, without crossing an Include."
+            )
+            controls.pack_start(button, False, False, 0)
         self.search = Gtk.SearchEntry()
-        self.search.set_placeholder_text("Buscar comando ou arquivo")
+        self.search.set_placeholder_text("Search commands or files")
         self.search.connect("search-changed", self.refilter)
         controls.pack_start(self.search, True, True, 0)
         self.store = Gtk.ListStore(object, bool, str, str, str, str, bool, str)
@@ -219,14 +229,14 @@ class StartupEditor(Gtk.Window):
         self.tree.set_tooltip_column(7)
         toggle = Gtk.CellRendererToggle()
         toggle.connect("toggled", self.toggle)
-        col = Gtk.TreeViewColumn("Ativo", toggle, active=1, activatable=6)
+        col = Gtk.TreeViewColumn("Enabled", toggle, active=1, activatable=6)
         col.set_fixed_width(55)
         self.tree.append_column(col)
         for index, title, width in (
-            (2, "Momento", 155),
-            (3, "Comando", 400),
-            (4, "Arquivo", 170),
-            (5, "Estado", 145),
+            (2, "When", 155),
+            (3, "Command", 400),
+            (4, "File", 170),
+            (5, "Status", 145),
         ):
             cell = Gtk.CellRendererText()
             cell.props.ellipsize = 3
@@ -241,6 +251,13 @@ class StartupEditor(Gtk.Window):
         scroll = Gtk.ScrolledWindow()
         scroll.add(self.tree)
         outer.pack_start(scroll, True, True, 0)
+        order_note = Gtk.Label(
+            label="XML order: JWM 2.4 calls commands for each event from bottom to top, without waiting for them to finish.",
+            xalign=0,
+        )
+        order_note.set_line_wrap(True)
+        order_note.set_max_width_chars(105)
+        outer.pack_start(order_note, False, False, 0)
         self.explanation = Gtk.Label(xalign=0)
         self.explanation.set_line_wrap(True)
         self.explanation.set_max_width_chars(105)
@@ -255,22 +272,22 @@ class StartupEditor(Gtk.Window):
         buttons.set_min_children_per_line(1)
         outer.pack_start(buttons, False, False, 0)
         for label, callback in [
-            ("Adicionar", self.add_command),
-            ("Editar", self.edit_selected),
-            ("Excluir", self.remove_selected),
-            ("Abrir origem", self.open_source),
-            ("Descartar", self.discard),
-            ("Ver alterações", self.show_changes),
-            ("Salvar", self.save),
+            ("Add", self.add_command),
+            ("Edit", self.edit_selected),
+            ("Delete", self.remove_selected),
+            ("Open source", self.open_source),
+            ("Discard", self.discard),
+            ("View changes", self.show_changes),
+            ("Save", self.save),
         ]:
             button = Gtk.Button(label=label)
             button.connect("clicked", callback)
             buttons.add(button)
-            if label == "Editar":
+            if label == "Edit":
                 self.edit_button = button
-            elif label == "Excluir":
+            elif label == "Delete":
                 self.remove_button = button
-            elif label == "Abrir origem":
+            elif label == "Open source":
                 self.source_button = button
         self.connect("delete-event", lambda *_: not self.can_discard())
         self.refresh()
@@ -290,14 +307,33 @@ class StartupEditor(Gtk.Window):
 
     def selected(self):
         model, it = self.tree.get_selection().get_selected()
-        return model[it][0] if it is not None else None
+        if it is None:
+            return None
+        try:
+            return self.document.get(model[it][0].token)
+        except StopIteration:
+            # A save may have replaced temporary tokens while GTK is still
+            # emitting selection changes for rows about to be cleared.
+            return None
 
     def selection_changed(self, *_):
         command = self.selected()
         self.edit_button.set_sensitive(bool(command and command.editable))
         self.remove_button.set_sensitive(bool(command and command.editable))
         self.source_button.set_sensitive(bool(command and not command.editable))
+        for button, direction in ((self.up_button, -1), (self.down_button, 1)):
+            button.set_sensitive(
+                bool(
+                    command
+                    and self.document.move_target(command.token, direction) is not None
+                )
+            )
         self.update_explanation()
+
+    def move_selected(self, direction):
+        command = self.selected()
+        if command and self.document.move(command.token, direction):
+            self.refresh(command.token)
 
     def update_explanation(self):
         command = self.selected() if hasattr(self, "tree") else None
@@ -306,7 +342,7 @@ class StartupEditor(Gtk.Window):
             self.explanation.set_text(
                 HINTS.get(
                     kind,
-                    "Salvar não executa comandos. Eles serão usados no próximo evento correspondente do JWM.",
+                    "Saving does not run commands. They run on the next corresponding JWM event.",
                 )
             )
 
@@ -315,16 +351,16 @@ class StartupEditor(Gtk.Window):
         duplicates = self.document.duplicates()
         for command in self.document.entries():
             state = (
-                "Incluído · leitura"
+                "Included · read-only"
                 if not command.editable
                 else (
-                    "Novo"
+                    "New"
                     if command.span is None
-                    else "Alterado" if command.token in self.document.changes else ""
+                    else "Changed" if command.token in self.document.changes else ""
                 )
             )
             if command.token in duplicates:
-                state = ("Repetido · " + state).rstrip(" ·")
+                state = ("Duplicate · " + state).rstrip(" ·")
             it = self.store.append(
                 [
                     command,
@@ -343,9 +379,9 @@ class StartupEditor(Gtk.Window):
                     self.tree.get_selection().select_path(path)
         self.file_label.set_text(str(self.document.path))
         self.file_label.set_tooltip_text(str(self.document.path))
-        text = f"{len(self.document.entries())} comandos · {len(self.document.changes)+len(self.document.additions)} alterações pendentes"
+        text = f"{len(self.document.entries())} commands · {len(self.document.changes)+len(self.document.additions)+int(self.document.reordered)} pending changes"
         if duplicates:
-            text += " · Há comandos repetidos no mesmo momento"
+            text += " · Duplicate commands for the same event"
         if self.document.warnings:
             text += "\n" + "; ".join(self.document.warnings)
         self.status.set_text(text)
@@ -376,9 +412,7 @@ class StartupEditor(Gtk.Window):
         return result == Gtk.ResponseType.YES
 
     def can_discard(self):
-        return not self.document.dirty or self.confirm(
-            "Descartar as alterações não salvas?"
-        )
+        return not self.document.dirty or self.confirm("Discard unsaved changes?")
 
     def toggle(self, _renderer, path):
         command = self.filtered[path][0]
@@ -413,7 +447,7 @@ class StartupEditor(Gtk.Window):
                     if self.document.duplicates(
                         candidate, command.token if command else None
                     ) and not self.confirm(
-                        "Esse comando já está ativado no mesmo momento. Manter a repetição?"
+                        "This command is already enabled for the same event. Keep the duplicate?"
                     ):
                         continue
                     updated = (
@@ -438,7 +472,9 @@ class StartupEditor(Gtk.Window):
         if (
             command
             and command.editable
-            and self.confirm("Excluir este comando? A exclusão será gravada ao salvar.")
+            and self.confirm(
+                "Delete this command? The deletion will be written when you save."
+            )
         ):
             self.document.remove(command.token)
             self.refresh()
@@ -460,12 +496,12 @@ class StartupEditor(Gtk.Window):
 
     def open_file(self, *_):
         dialog = Gtk.FileChooserDialog(
-            title="Abrir configuração do JWM",
+            title="Open JWM configuration",
             transient_for=self,
             action=Gtk.FileChooserAction.OPEN,
         )
         dialog.add_buttons(
-            "Cancelar", Gtk.ResponseType.CANCEL, "Abrir", Gtk.ResponseType.OK
+            "Cancel", Gtk.ResponseType.CANCEL, "Open", Gtk.ResponseType.OK
         )
         dialog.set_show_hidden(True)
         dialog.set_filename(str(self.document.path))
@@ -487,19 +523,19 @@ class StartupEditor(Gtk.Window):
                     self.document.original.decode("utf-8").splitlines(keepends=True),
                     self.document.preview().splitlines(keepends=True),
                     fromfile="Original",
-                    tofile="Alterado",
+                    tofile="Changed",
                 )
             )
         except (ValueError, ET.ParseError) as exc:
             self.message(str(exc))
             return
-        dialog = Gtk.Dialog(title="Alterações no XML", transient_for=self, modal=True)
+        dialog = Gtk.Dialog(title="XML changes", transient_for=self, modal=True)
         dialog.set_default_size(800, 480)
-        dialog.add_button("Fechar", Gtk.ResponseType.CLOSE)
+        dialog.add_button("Close", Gtk.ResponseType.CLOSE)
         view = Gtk.TextView()
         view.set_editable(False)
         view.set_monospace(True)
-        view.get_buffer().set_text(diff or "Nenhuma alteração.")
+        view.get_buffer().set_text(diff or "No changes.")
         scroll = Gtk.ScrolledWindow()
         scroll.add(view)
         dialog.get_content_area().add(scroll)
@@ -522,7 +558,7 @@ def main():
     from .. import __version__
 
     parser = argparse.ArgumentParser(
-        description="Edita comandos de início, reinício e encerramento do JWM."
+        description="Edit JWM startup, restart and shutdown commands."
     )
     parser.add_argument("configuration", nargs="?", default=str(Path.home() / ".jwmrc"))
     parser.add_argument(

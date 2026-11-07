@@ -3,9 +3,9 @@
 import configparser
 import os
 import re
-import shlex
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from jwm_tools import __version__
 
 HOME = Path.home()
 OUTPUT = HOME / ".jwm-menu"
@@ -63,14 +63,13 @@ def get_app(path):
         if any(d in not_in for d in desktops):
             return None
 
-        # name = entry.get("Name[pt_BR]", entry.get("Name", "")).strip()
         name = entry.get("Name", "").strip()
         command = entry.get("Exec", "").strip()
 
         if not name or not command:
             return None
 
-        # Remove field codes da especificação Desktop Entry.
+        # Remove Desktop Entry field codes.
         command = re.sub(r"%[fFuUdDnNickvm]", "", command)
         command = command.replace("%%", "%").strip()
 
@@ -85,7 +84,7 @@ def get_app(path):
 
         category = next(
             (CATEGORIES[c] for c in categories if c in CATEGORIES),
-            "Outros",
+            "Other",
         )
 
         return name, command, icon, category
@@ -103,7 +102,7 @@ def main():
             continue
 
         for path in sorted(directory.rglob("*.desktop")):
-            # Entradas do usuário têm precedência.
+            # User entries take precedence.
             identifier = str(path.relative_to(directory)).replace("/", "-")
 
             if identifier in apps:
@@ -137,13 +136,12 @@ def main():
         OUTPUT, encoding="unicode", xml_declaration=False
     )
 
-    print(f"Menu gerado: {OUTPUT} ({len(apps)} aplicativos)")
+    print(f"Menu generated: {OUTPUT} ({len(apps)} applications)")
 
 
 if __name__ == "__main__":
     import argparse
-    from jwm_tools import __version__
-    parser = argparse.ArgumentParser(description="Gera o menu do JWM a partir dos arquivos .desktop.")
+    parser = argparse.ArgumentParser(description="Generate a JWM menu from installed .desktop files.")
     parser.add_argument('--version', action='version', version='jwm_menu ' + __version__)
     parser.parse_args()
     main()

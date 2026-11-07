@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing release tag to build and publish
         required: true
-        default: v0.1.1
+        default: v0.1
         type: string
 
 permissions:
@@ -33,6 +33,7 @@ jobs:
       - name: Verify release artifacts
         working-directory: dist
         run: |
+          sha256sum ./*.deb > SHA256SUMS
           sha256sum -c SHA256SUMS
           dpkg-deb --info ./*.deb
       - name: Publish assets
@@ -46,5 +47,5 @@ jobs:
             gh release create "$RELEASE_TAG" --verify-tag --draft \
               --title "JWM Tools ${RELEASE_TAG#v}" --generate-notes
           fi
-          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.deb dist/SHA256SUMS --clobber
+          gh release upload "$RELEASE_TAG" dist/*.deb dist/SHA256SUMS --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest

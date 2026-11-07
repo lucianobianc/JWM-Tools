@@ -51,16 +51,14 @@ def patch_node(text, binding, original):
         return opening[:-2] + ">" + safe + "</" + binding.kind + ">"
     inner = text[cs:ce]
     if "<" in re.sub(r"<!--.*?-->", "", inner, flags=re.S):
-        raise ValueError(
-            "Ação com conteúdo misto. Edite essa ação no arquivo de origem."
-        )
+        raise ValueError("Action contains mixed content. Edit it in the source file.")
     visible = [
         m
         for m in CONTENT.finditer(inner)
         if not m.group().startswith("<!--") and m.group().strip()
     ]
     if len(visible) > 1:
-        raise ValueError("Ação dividida por comentários; edite-a no arquivo de origem.")
+        raise ValueError("Action is split by comments; edit it in the source file.")
     if visible:
         m = visible[0]
         part = m.group()

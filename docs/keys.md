@@ -1,54 +1,55 @@
 # jwm_keys
 
 ```sh
-jwm_keys ~/.jwmrc
+jwm_keys              # opens ~/.jwmrc
+jwm_keys another.jwmrc
 ```
 
-A lista mostra os vínculos `Key` e `Mouse`, com busca e filtro por tipo.
-Use “Novo teclado” ou “Novo mouse” para adicionar um vínculo; selecione uma
-linha para editar ou excluir. “Capturar” identifica a tecla ou botão recebido
-pela janela. Atalhos globais do JWM podem interceptar a captura; nesse caso,
-selecione os modificadores e informe a tecla manualmente.
+The list shows `Key` and `Mouse` bindings, with search and type filters.
+Use **New keyboard binding** or **New mouse binding** to add an entry; select a
+row to edit or delete it. **Capture** identifies the key or button received by
+the window. JWM global shortcuts may intercept capture; enter the modifiers and
+key manually in that case.
 
-As alterações ficam pendentes. “Ver alterações” mostra a diferença no XML;
-“Salvar” grava o arquivo, e “Salvar e reiniciar JWM” também solicita o reinício
-do gerenciador. “Descartar” volta aos valores carregados.
+Changes remain pending. **View changes** shows the XML diff; **Save** writes the
+file, and **Save and restart JWM** also requests a window manager restart.
+**Discard** restores the loaded values.
 
-A gravação mantém comentários, formatação, atributos desconhecidos e outras
-configurações. O arquivo anterior é guardado em `.bak`. Alterações externas no
-arquivo aberto ou em Includes impedem a gravação até recarregar. Ações com
-conteúdo misto ou CDATA podem ter os atributos alterados, mas a reescrita do
-texto da ação exige edição no arquivo de origem.
+Saving preserves comments, formatting, unknown attributes and other settings.
+The previous file is backed up as `<filename>.bak`. External changes to the open
+file or its Includes require reloading before saving. Mixed-content or CDATA
+actions can have their attributes edited, but changing their action text requires
+editing the source file.
 
-## Teclado
+## Keyboard
 
-Aceita nomes X11, como `Return`, `F4` ou `XF86AudioRaiseVolume`, e keycodes de
-8 a 255. Os modificadores são Ctrl (`C`), Shift (`S`), Alt (`A` ou `1`), Super
-(`4`) e Mod2/3/5. A tecla `#` pode ser usada com `desktop#`, `send#` e `at#`.
+Accepts X11 names such as `Return`, `F4` or `XF86AudioRaiseVolume`, and keycodes
+from 8 to 255. Modifiers are Ctrl (`C`), Shift (`S`), Alt (`A` or `1`), Super
+(`4`) and Mod2/3/5. A `#` key template can be used with `desktop#`, `send#` and `at#`.
 
 ## Mouse
 
-Os contextos são área de trabalho (`root`), título (`title`), borda (`border`),
-ícone (`icon`) e botões de fechar, maximizar e minimizar. Clique usa o número
-do botão; soltura usa seu negativo. No JWM 2.4.6, duplo clique multiplica o
-botão por 11: esquerdo = 11, central = 22, direito = 33.
+Contexts include desktop (`root`), title bar (`title`), border (`border`), window
+icon (`icon`), and close, maximize and minimize buttons. Press uses the button's
+number; release uses its negative. In JWM 2.4.6, double click multiplies the button
+by 11: left = 11, middle = 22, right = 33.
 
-A roda usa os botões 4/5 e, para rolagem horizontal, 6/7. Na área de trabalho,
-os botões atribuídos a `RootMenu onroot` podem ter prioridade. Vínculos do
-mouse dentro do conteúdo dos aplicativos não são editados por esta ferramenta.
+Scrolling uses buttons 4/5 and horizontal scrolling uses 6/7. On the desktop,
+buttons assigned to `RootMenu onroot` may take precedence. Mouse bindings within
+application content are outside this editor's scope.
 
-## Ações e Includes
+## Actions and Includes
 
-Escolha uma ação do JWM, como `close`, `maximize`, `move`, `resize` ou `root:1`.
-Para iniciar um programa, use `exec:comando`. O editor não executa essas ações
-ao abrir ou editar o arquivo.
+Choose a JWM action such as `close`, `maximize`, `move`, `resize` or `root:1`.
+To start a program, use `exec:command`. The editor does not execute these actions
+when opening or editing a file.
 
-Includes estáticos são lidos; vínculos incluídos são somente leitura na lista.
-“Abrir origem” permite editar explicitamente esse arquivo. Includes com `exec:`
-não são executados. Caminhos relativos seguem o diretório de execução do JWM.
+Static Includes are read; included bindings are read-only in the list.
+**Open source** opens that file for explicit editing. Dynamic `exec:` Includes
+are not executed. Relative paths follow JWM's working directory.
 
-Combinações repetidas são sinalizadas. A verificação considera modificadores,
-nomes de teclas, expansão de `#`, keycodes e contexto/evento do mouse. Não resolve
-todas as equivalências entre keycodes e nomes simbólicos em layouts X11.
+Repeated combinations are flagged. Conflict checks consider modifiers, key names,
+`#` expansion, keycodes and mouse context/event. They do not resolve every mapping
+between keycodes and symbolic names across X11 layouts.
 
-Sintaxe de referência: JWM 2.4.6, `src/parse.c`, `src/binding.c` e `src/event.c`.
+Syntax reference: JWM 2.4.6, `src/parse.c`, `src/binding.c` and `src/event.c`.
