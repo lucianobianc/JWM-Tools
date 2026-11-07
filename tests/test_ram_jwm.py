@@ -15,3 +15,16 @@ class RamTooltipTests(unittest.TestCase):
             timeout=25,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_monitor_remains_embedded_with_the_tooltip_fix(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).with_name("ram_tooltip_worker.py")),
+                "--swallow",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=25,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -11,9 +11,11 @@ The editor opens `~/.jwmrc` by default, falling back to `~/.jwm-menu` if no main
 configuration exists. New files are only created when saved. The desktop launcher
 opens the editor. Running `jwm_menu` without options opens the editor. `--edit` remains an alias.
 
-**Generate from applications** replaces the selected menu's contents with installed
-applications grouped by category. **Clear menu** removes its entries and submenus.
-Select a submenu to limit either action to it. Both actions ask for confirmation
+**Generate from applications** asks whether to **Add to current menu** or
+**Replace menu contents**. Add keeps existing entries, submenus and Includes,
+and appends installed applications grouped by category. Replace rebuilds the
+selected menu. Cancel leaves it unchanged. **Clear menu** removes its entries and submenus.
+Select a submenu to limit either action to it. Generation and clearing ask for confirmation
 and remain pending until **Save**; **Discard** restores the loaded file. Included
 files and unrelated JWM configuration are never cleared.
 
@@ -21,8 +23,10 @@ files and unrelated JWM configuration are never cleared.
 
 Select a menu and use **Add entry** to add an application, submenu, separator,
 Include or JWM action. Selecting a leaf adds the new entry after it. **Installed
-application…** fills in its name, command and icon. **Program or script…** opens a
-file chooser. Commands use shell syntax without an `exec:` prefix.
+application…** fills in its name, command and icon. **Choose file…** next to
+**Path** opens a file chooser. Program paths are quoted for the shell;
+Include paths are inserted directly. Commands use shell syntax without an `exec:`
+prefix.
 
 Use **Choose icon…** to browse the installed theme in a visual grid, search by
 name and filter by category. **Load more** shows further matches. Symbolic icons
@@ -34,7 +38,8 @@ extra `IconPath` configuration. Files remain at those paths and are not copied;
 removing a theme package may therefore remove an icon used by the menu. You can
 also enter an icon name or image path manually. The tree displays available icons.
 
-**Move up / Move down** change sibling order. **Indent** puts an entry inside the
+**Move up / Move down** change sibling order. Collapsed submenus stay collapsed when other entries are
+added or edited. **Indent** puts an entry inside the
 preceding submenu. **Outdent** moves it after its containing submenu. JWM menus
 follow top-to-bottom order. **Add root menu** creates a separate `RootMenu`, whose
 **Root buttons** field selects its desktop mouse buttons.
@@ -50,8 +55,14 @@ before saving.
 
 ## Includes and generated menus
 
-Static Includes appear as entries. Select one and use **Open Include** to edit
-its file. Relative paths follow JWM's working directory. Dynamic Includes and
+Static Includes expand in the tree, including nested Includes. **Source file**
+shows where each entry is defined. **Edit** on an included entry opens its source
+file and selects that entry for editing. Save there, then use **Back** to return
+to the parent menu. **Open source file** also navigates to the defining file.
+Moving or deleting included entries requires opening that file first.
+
+Relative paths follow JWM's working directory. Missing files, Include cycles and
+depth limits are reported without changing the configuration. Dynamic Includes and
 `Dynamic` menu commands are preserved without execution; their generated contents
 are not expanded in the editor.
 

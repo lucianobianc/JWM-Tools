@@ -37,6 +37,9 @@ To place the resource indicator in the JWM tray:
 </Tray>
 ```
 
+Tooltip rows use the matching bar colors, including `--ramfg`, `--swapfg`,
+`--cpufg` and `--batteryfg` overrides. Uptime uses `--tooltip-fg`.
+
 ## jwm_style
 
 Run `jwm_style ~/.jwmrc`. The editor uses the open configuration and styles you

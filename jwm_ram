@@ -198,10 +198,20 @@ if args.tooltip_fontsize is not None:
     # Make an independent font so TkDefaultFont and other widgets stay unchanged.
     tooltip_font = tkfont.Font(root=root, font=args.tooltip_font)
     tooltip_font.configure(size=args.tooltip_fontsize)
-tooltip_label = tk.Label(tooltip, bg=args.tooltip_bg, fg=args.tooltip_fg,
-                         font=tooltip_font, justify='left',
-                         padx=8, pady=5, relief='solid', bd=1)
-tooltip_label.pack()
+tooltip_frame = tk.Frame(tooltip, bg=args.tooltip_bg, padx=8, pady=5,
+                         relief='solid', bd=1)
+tooltip_frame.pack()
+tooltip_rows = {}
+for name in visible:
+    label = tk.Label(tooltip_frame, bg=args.tooltip_bg,
+                     fg=getattr(args, f'{name}fg'), font=tooltip_font,
+                     justify='left', anchor='w', padx=0, pady=0)
+    label.pack(fill='x')
+    tooltip_rows[name] = label
+uptime_label = tk.Label(tooltip_frame, bg=args.tooltip_bg, fg=args.tooltip_fg,
+                        font=tooltip_font, justify='left', anchor='w',
+                        padx=0, pady=0)
+uptime_label.pack(fill='x')
 hovering = False
 
 
@@ -228,11 +238,11 @@ def system_uptime():
     return f'{minutes}m'
 
 
-def tooltip_text():
+def update_tooltip():
     labels = {'ram': 'RAM', 'swap': 'Swap', 'cpu': 'CPU', 'battery': 'Battery'}
-    indicators = '\n'.join(f'{labels[name]}: {latest_details.get(name, "N/A")}'
-                           for name in visible)
-    return f'{indicators}\nUptime: {system_uptime()}'
+    for name, label in tooltip_rows.items():
+        label.configure(text=f'{labels[name]}: {latest_details.get(name, "N/A")}')
+    uptime_label.configure(text=f'Uptime: {system_uptime()}')
 
 
 def place_tooltip():
@@ -258,7 +268,7 @@ def place_tooltip():
 def on_enter(_event):
     global hovering
     hovering = True
-    tooltip_label.configure(text=tooltip_text())
+    update_tooltip()
     place_tooltip()
     tooltip.deiconify()
     # JWM does not manage override-redirect windows, so -topmost alone cannot
@@ -306,7 +316,7 @@ def refresh():
 
         latest_details = details
         if hovering:
-            tooltip_label.configure(text=tooltip_text())
+            update_tooltip()
         canvas.delete('all')
         for i, name in enumerate(visible):
             fraction = max(0.0, min(1.0, fractions[name]))
@@ -323,7 +333,7 @@ def refresh():
     except (OSError, ValueError, KeyError, IndexError):
         latest_details = {}
         if hovering:
-            tooltip_label.configure(text=tooltip_text())
+            update_tooltip()
         canvas.delete('all')
         canvas.create_text(args.width // 2, args.height // 2,
                            text='N/A', fill=error_color)

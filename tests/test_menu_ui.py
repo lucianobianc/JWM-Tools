@@ -72,12 +72,15 @@ class MenuUITests(unittest.TestCase):
     def test_program_picker_quotes_path(self):
         dialog = EntryDialog(self.window)
         try:
+            self.assertIs(
+                dialog.command.get_parent(), dialog.program_button.get_parent()
+            )
             with patch.object(dialog, "choose_path", return_value="/tmp/my program"):
-                dialog.choose_program()
+                dialog.program_button.clicked()
                 self.assertEqual(dialog.command.get_text(), "'/tmp/my program'")
             dialog.kind.set_active_id("Include")
             with patch.object(dialog, "choose_path", return_value="/tmp/my menu"):
-                dialog.choose_program()
+                dialog.program_button.clicked()
                 self.assertEqual(dialog.command.get_text(), "/tmp/my menu")
         finally:
             dialog.destroy()
@@ -106,12 +109,12 @@ class MenuUITests(unittest.TestCase):
     def test_include_button_and_open_source(self):
         root = self.window.document.roots()[0]
         self.select(root.children[2])
-        self.assertFalse(self.window.buttons["Open Include"].get_sensitive())
+        self.assertFalse(self.window.buttons["Open source file"].get_sensitive())
         included = Path(self.temp.name) / "menu"
         included.write_text('<JWM><Program label="Included">true</Program></JWM>')
         self.window.document.update(root.children[2], {}, str(included))
         self.window.refresh(root.children[2])
-        self.assertTrue(self.window.buttons["Open Include"].get_sensitive())
+        self.assertTrue(self.window.buttons["Open source file"].get_sensitive())
         with patch.object(self.window, "confirm", return_value=True):
             self.window.open_include()
         self.assertEqual(self.window.document.path, included)
@@ -157,7 +160,7 @@ class MenuUITests(unittest.TestCase):
         self.select(target)
         with patch(
             "jwm_tools.menu.generator.generate_tree", return_value=(generated, 1)
-        ), patch.object(self.window, "confirm", return_value=True):
+        ), patch.object(self.window, "generation_mode", return_value="replace"):
             self.window.buttons["Generate from applications"].clicked()
         self.assertEqual(target.children[0].children[0].value, "true")
         self.assertEqual(root.children[1].value, "xterm")
@@ -171,7 +174,7 @@ class MenuUITests(unittest.TestCase):
         generated = ET.fromstring('<JWM><Program label="Fixture">true</Program></JWM>')
         with patch(
             "jwm_tools.menu.generator.generate_tree", return_value=(generated, 1)
-        ), patch.object(self.window, "confirm", return_value=False):
+        ), patch.object(self.window, "generation_mode", return_value=None):
             self.window.generate_apps()
         self.assertFalse(self.window.document.dirty)
         with patch(
@@ -192,7 +195,9 @@ class MenuUITests(unittest.TestCase):
         )
         with patch.multiple(
             generator, HOME=Path(self.temp.name), SEARCH_PATHS=[apps]
-        ), patch.object(self.window, "confirm", return_value=True), patch.object(
+        ), patch.object(
+            self.window, "generation_mode", return_value="replace"
+        ), patch.object(
             self.window, "message"
         ) as message:
             self.window.buttons["Generate from applications"].clicked()
@@ -205,3 +210,118 @@ class MenuUITests(unittest.TestCase):
         self.assertTrue(self.window.save())
         self.assertIn("Fixture", self.path.read_text())
         self.assertEqual(self.path.with_name("jwmrc.bak").read_text(), self.xml)
+
+    def test_add_generation_keeps_entries_and_include_until_save(self):
+        import xml.etree.ElementTree as ET
+
+        generated = ET.fromstring(
+            '<JWM><Menu label="Generated"><Program label="New">new</Program></Menu></JWM>'
+        )
+        root = self.window.document.roots()[0]
+        old = list(root.children)
+        with patch(
+            "jwm_tools.menu.generator.generate_tree", return_value=(generated, 1)
+        ), patch.object(self.window, "generation_mode", return_value="add"):
+            self.window.generate_apps()
+        self.assertEqual(root.children[:3], old)
+        self.assertEqual(root.children[-1].attrs["label"], "Generated")
+        self.assertEqual(self.path.read_text(), self.xml)
+        self.assertTrue(self.window.save())
+        self.assertIn("exec:false", self.path.read_text())
+
+    def test_static_include_entries_edit_their_source_then_back(self):
+        included = Path(self.temp.name) / "included-menu"
+        included.write_text(
+            '<JWM><Menu label="Included"><Program label="Original">true</Program></Menu></JWM>'
+        )
+        self.path.write_text(
+            f'<JWM><RootMenu onroot="12"><Include>{included}</Include></RootMenu><Key key="F1">close</Key></JWM>'
+        )
+        original = self.path.read_bytes()
+        self.window.load(self.path)
+        program = next(node for node in self.window.origins if node.kind == "Program")
+        self.select(program)
+        self.assertTrue(self.window.buttons["Edit"].get_sensitive())
+        self.assertFalse(self.window.buttons["Delete"].get_sensitive())
+        with patch.object(self.window, "edit_form") as form:
+            self.window.edit_selected()
+            local = form.call_args.args[0]
+        self.assertEqual(self.window.document.path, included)
+        self.assertIs(self.window.selected(), local)
+        self.window.document.update(local, {**local.attrs, "label": "Changed"}, "false")
+        self.assertTrue(self.window.save())
+        self.assertEqual(self.path.read_bytes(), original)
+        self.window.go_back()
+        self.assertEqual(self.window.document.path, self.path)
+        self.assertTrue(
+            any(node.attrs.get("label") == "Changed" for node in self.window.origins)
+        )
+
+    def test_nested_include_cycle_missing_and_dynamic_are_safe(self):
+        included = Path(self.temp.name) / "nested"
+        marker = Path(self.temp.name) / "must-not-exist"
+        included.write_text(
+            f'<JWM><Program label="Nested">true</Program><Include>{self.path}</Include></JWM>'
+        )
+        self.path.write_text(
+            f"<JWM><RootMenu><Include>{included}</Include><Include>{self.path.parent}/missing</Include><Include>exec:touch {marker}</Include></RootMenu></JWM>"
+        )
+        self.window.load(self.path)
+        self.assertTrue(
+            any(n.attrs.get("label") == "Nested" for n in self.window.origins)
+        )
+        self.assertIn("cycle", self.window.status.get_text())
+        self.assertIn("Cannot read Include", self.window.status.get_text())
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.window.document.dirty)
+
+    def test_generation_prompt_has_add_replace_and_cancel(self):
+        with patch("jwm_tools.menu.editor.Gtk.MessageDialog") as factory:
+            dialog = factory.return_value
+            dialog.run.return_value = 1
+            self.assertEqual(self.window.generation_mode(5), "add")
+            dialog.set_default_response.assert_called_with(1)
+            dialog.run.return_value = 2
+            self.assertEqual(self.window.generation_mode(5), "replace")
+            dialog.run.return_value = Gtk.ResponseType.CANCEL
+            self.assertIsNone(self.window.generation_mode(5))
+
+    def test_collapsed_submenu_stays_closed_when_adding_elsewhere(self):
+        root = self.window.document.roots()[0]
+        menu = root.children[0]
+        self.window.document.add(menu, "Program", {"label": "Nested"}, "true")
+        self.window.refresh(menu)
+        self.window.tree.expand_row(Gtk.TreePath.new_from_string("0:0"), False)
+        self.window.tree.collapse_row(Gtk.TreePath.new_from_string("0:0"))
+        self.assertFalse(
+            self.window.tree.row_expanded(Gtk.TreePath.new_from_string("0:0"))
+        )
+        added = self.window.document.add(
+            root, "Program", {"label": "Elsewhere"}, "false"
+        )
+        self.window.refresh(added)
+        self.assertFalse(
+            self.window.tree.row_expanded(Gtk.TreePath.new_from_string("0:0"))
+        )
+        self.assertIs(self.window.selected(), added)
+
+    def test_entry_fields_are_aligned_with_inline_icon_preview(self):
+        dialog = EntryDialog(self.window)
+        try:
+            dialog.icon.set_text("folder")
+            for _ in range(10):
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+            entries = (
+                dialog.label,
+                dialog.command,
+                dialog.icon,
+                dialog.tooltip,
+                dialog.onroot,
+            )
+            allocations = [entry.get_allocation() for entry in entries]
+            self.assertEqual(len({a.x for a in allocations}), 1)
+            self.assertEqual(len({a.width for a in allocations}), 1)
+            self.assertEqual(len({a.height for a in allocations}), 1)
+        finally:
+            dialog.destroy()

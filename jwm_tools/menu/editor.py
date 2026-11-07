@@ -54,16 +54,13 @@ class EntryDialog(Gtk.Dialog):
         self.command = Gtk.Entry()
         self.command.set_text(node.value if node else "")
         self.command.set_placeholder_text("Command, without exec:")
+        self.program_button = Gtk.Button(label="Choose file…")
+        self.program_button.connect("clicked", self.choose_program)
         self.icon = Gtk.Entry()
         self.icon.set_text(node.attrs.get("icon", "") if node else "")
         self.icon.set_placeholder_text("Icon theme name or image file")
-        self.image = Gtk.Image()
-        iconrow = Gtk.Box(spacing=8)
-        iconrow.pack_start(self.image, False, False, 0)
-        iconrow.pack_start(self.icon, True, True, 0)
         browse = Gtk.Button(label="Choose icon…")
         browse.connect("clicked", self.choose_icon)
-        iconrow.pack_start(browse, False, False, 0)
         self.tooltip = Gtk.Entry()
         self.tooltip.set_text(node.attrs.get("tooltip", "") if node else "")
         self.onroot = Gtk.Entry()
@@ -72,21 +69,21 @@ class EntryDialog(Gtk.Dialog):
             (
                 ("Type", self.kind),
                 ("Label", self.label),
-                ("Command / path", self.command),
-                ("Icon", iconrow),
+                ("Path", self.command),
+                ("Icon", self.icon),
                 ("Tooltip", self.tooltip),
                 ("Root buttons", self.onroot),
             )
         ):
             grid.attach(Gtk.Label(label=label, xalign=0), 0, row, 1, 1)
             grid.attach(widget, 1, row, 1, 1)
+        grid.attach(self.program_button, 2, 2, 1, 1)
+        grid.attach(browse, 2, 3, 1, 1)
+        self.icon.set_icon_activatable(Gtk.EntryIconPosition.SECONDARY, False)
         choices = Gtk.Box(spacing=8)
         self.app_button = Gtk.Button(label="Installed application…")
         self.app_button.connect("clicked", self.choose_application)
         choices.add(self.app_button)
-        self.program_button = Gtk.Button(label="Program or script…")
-        self.program_button.connect("clicked", self.choose_program)
-        choices.add(self.program_button)
         grid.attach(choices, 1, 6, 1, 1)
         self.note = Gtk.Label(
             label="Saving does not launch menu commands. Unknown attributes are preserved.",
@@ -119,11 +116,8 @@ class EntryDialog(Gtk.Dialog):
         )
 
     def update_icon(self, *_):
-        image = icon_pixbuf(self.icon.get_text().strip(), 32)
-        if image:
-            self.image.set_from_pixbuf(image)
-        else:
-            self.image.clear()
+        image = icon_pixbuf(self.icon.get_text().strip(), 22)
+        self.icon.set_icon_from_pixbuf(Gtk.EntryIconPosition.SECONDARY, image)
 
     def candidate(self):
         kind = self.kind.get_active_id()
@@ -241,6 +235,10 @@ class MenuEditor(Gtk.Window):
     def __init__(self, path):
         super().__init__(title="jwm_menu — Menu editor")
         self.document = MenuDocument(path)
+        self.origins = {}
+        self.history = []
+        self.tree_states = {}
+        self.tree_document_path = None
         self.set_default_size(1080, 650)
         self.set_size_request(720, 480)
         self.set_border_width(12)
@@ -257,10 +255,13 @@ class MenuEditor(Gtk.Window):
             button = Gtk.Button(label=label)
             button.connect("clicked", callback)
             header.add(button)
+        self.back_button = Gtk.Button(label="Back")
+        self.back_button.connect("clicked", self.go_back)
+        header.add(self.back_button)
         box.pack_start(header, False, False, 0)
-        self.store = Gtk.TreeStore(object, GdkPixbuf.Pixbuf, str, str, str)
+        self.store = Gtk.TreeStore(object, GdkPixbuf.Pixbuf, str, str, str, str)
         self.tree = Gtk.TreeView(model=self.store)
-        self.tree.set_tooltip_column(4)
+        self.tree.set_tooltip_column(5)
         column = Gtk.TreeViewColumn("Menu entry")
         icon = Gtk.CellRendererPixbuf()
         column.pack_start(icon, False)
@@ -273,13 +274,13 @@ class MenuEditor(Gtk.Window):
         column.set_fixed_width(400)
         column.set_resizable(True)
         self.tree.append_column(column)
-        for index, title in ((3, "Type"), (4, "Command / path")):
+        for index, title in ((3, "Type"), (4, "Path"), (5, "Source file")):
             cell = Gtk.CellRendererText()
             cell.props.ellipsize = 3
             column = Gtk.TreeViewColumn(title, cell, text=index)
             column.set_resizable(True)
             column.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
-            column.set_fixed_width(130 if index == 3 else 380)
+            column.set_fixed_width({3: 120, 4: 280, 5: 150}[index])
             column.set_expand(index == 4)
             column.set_min_width(100)
             self.tree.append_column(column)
@@ -303,7 +304,7 @@ class MenuEditor(Gtk.Window):
             ("Move down", lambda *_: self.move(1)),
             ("Indent", self.indent),
             ("Outdent", self.outdent),
-            ("Open Include", self.open_include),
+            ("Open source file", self.open_include),
         ):
             button = Gtk.Button(label=label)
             button.connect("clicked", callback)
@@ -350,17 +351,42 @@ class MenuEditor(Gtk.Window):
         node = self.selected()
         if not hasattr(self, "buttons"):
             return
+        foreign = node in self.origins if node else False
         editable = bool(node and node.editable)
-        for label in ("Edit", "Delete", "Move up", "Move down", "Indent", "Outdent"):
-            self.buttons[label].set_sensitive(editable)
-        self.buttons["Open Include"].set_sensitive(
-            bool(node and self.document.include_path(node))
+        self.buttons["Edit"].set_sensitive(editable)
+        for label in ("Delete", "Move up", "Move down", "Indent", "Outdent"):
+            self.buttons[label].set_sensitive(editable and not foreign)
+        self.buttons["Open source file"].set_sensitive(
+            bool(node and (foreign or self.document.include_path(node)))
         )
 
-    def refresh(self, selected=None):
-        self.store.clear()
+    def refresh(self, selected=None, reset=False):
+        def key(node, source):
+            return (source, node.kind, node.span[:2] if node.span else id(node))
 
-        def add(node, parent=None):
+        expanded = set()
+        if self.tree_document_path is not None:
+
+            def remember(view, path, _data):
+                row = self.store[path]
+                expanded.add(key(row[0], row[5]))
+
+            self.tree.map_expanded_rows(remember, None)
+            self.tree_states[self.tree_document_path] = expanded
+        restore = None if reset else self.tree_states.get(self.document.path)
+        self.tree_document_path = self.document.path
+        self.store.clear()
+        self.origins = {}
+        documents = {self.document.path: self.document}
+        warnings = []
+        expand_paths = []
+        selected_paths = []
+
+        def add(node, parent=None, document=None, stack=()):
+            document = document or self.document
+            foreign = document is not self.document
+            if foreign:
+                self.origins[node] = document.path
             label = (
                 node.label
                 if node.kind != "RootMenu"
@@ -374,20 +400,45 @@ class MenuEditor(Gtk.Window):
                     node,
                     icon_pixbuf(node.attrs.get("icon")),
                     label,
-                    node.kind,
+                    node.kind + (" · included" if foreign else ""),
                     node.value,
+                    str(document.path),
                 ],
             )
             for child in node.children:
-                add(child, it)
+                add(child, it, document, stack)
+            if node.kind == "Include":
+                path = document.include_path(node)
+                if path is not None:
+                    if path in stack or path == document.path or len(stack) >= 16:
+                        warnings.append(f"Include cycle/depth limit: {path}")
+                    else:
+                        try:
+                            if not path.is_file():
+                                raise OSError(f"File not found: {path}")
+                            if path not in documents:
+                                documents[path] = MenuDocument(path)
+                            included = documents[path]
+                            for child in included.roots():
+                                add(child, it, included, (*stack, document.path))
+                        except (OSError, ValueError, ET.ParseError) as exc:
+                            warnings.append(f"Cannot read Include {path}: {exc}")
+            if restore is not None and key(node, str(document.path)) in restore:
+                expand_paths.append(self.store.get_path(it))
             if node is selected:
                 path = self.store.get_path(it)
-                self.tree.expand_to_path(path)
-                self.tree.get_selection().select_path(path)
+                selected_paths.append(path)
 
         for node in self.document.roots():
             add(node)
-        self.tree.expand_all()
+        if restore is None:
+            self.tree.expand_all()
+        else:
+            for path in sorted(expand_paths, key=lambda p: p.get_depth()):
+                self.tree.expand_row(path, False)
+        for path in selected_paths:
+            self.tree.expand_to_path(path)
+            self.tree.get_selection().select_path(path)
         self.file_label.set_text(str(self.document.path))
         self.file_label.set_tooltip_text(str(self.document.path))
         status = "Unsaved changes" if self.document.dirty else "No pending changes"
@@ -395,11 +446,20 @@ class MenuEditor(Gtk.Window):
             status += (
                 " · Running the menu generator will replace manual edits to this file."
             )
+        if warnings:
+            status += "\n" + "\n".join(dict.fromkeys(warnings))
         self.status.set_text(status)
+        self.status.set_line_wrap(True)
+        self.status.set_max_width_chars(105)
+        self.back_button.set_sensitive(bool(self.history))
         self.selection_changed()
 
     def destination(self):
         node = self.selected()
+        if node in self.origins:
+            raise ValueError(
+                "Open the source file before adding entries to this included menu."
+            )
         if node and node.kind in ("RootMenu", "Menu"):
             return node, None
         if node:
@@ -409,6 +469,9 @@ class MenuEditor(Gtk.Window):
 
     def bulk_target(self):
         node = self.selected()
+        if node in self.origins or node and node.kind == "Include":
+            self.message("Open the source file to change this included menu.")
+            return None
         if node:
             return node if node.kind in ("RootMenu", "Menu") else node.parent
         roots = [n for n in self.document.roots() if n.kind == "RootMenu"]
@@ -443,6 +506,26 @@ class MenuEditor(Gtk.Window):
                 target.children.remove(child)
             self.refresh(target if target is not self.document.root else None)
 
+    def generation_mode(self, count):
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            text=f"Generate menu entries for {count} installed applications?",
+        )
+        dialog.format_secondary_text(
+            "Add keeps the current entries, submenus and Includes. Replace removes this menu's current entries. Changes stay pending until you save."
+        )
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Replace menu contents", 2)
+        dialog.add_button("Add to current menu", 1)
+        dialog.set_default_response(1)
+        try:
+            response = dialog.run()
+            return {1: "add", 2: "replace"}.get(response)
+        finally:
+            dialog.destroy()
+
     def generate_apps(self, *_):
         target = self.bulk_target()
         if target is None:
@@ -454,9 +537,8 @@ class MenuEditor(Gtk.Window):
             if not count:
                 self.message("No installed applications were found. The menu was kept.")
                 return
-            if not self.confirm(
-                f"Replace this menu's entries with {count} installed applications? This stays pending until you save. Include files are kept."
-            ):
+            mode = self.generation_mode(count)
+            if mode not in ("add", "replace"):
                 return
 
             # Build and validate the replacement before changing the current tree.
@@ -472,7 +554,9 @@ class MenuEditor(Gtk.Window):
                 return node
 
             generated = [build(child, target) for child in tree]
-            if target is self.document.root:
+            if mode == "add":
+                target.children.extend(generated)
+            elif target is self.document.root:
                 retained = [
                     n for n in target.children if n not in self.document.roots()
                 ]
@@ -530,13 +614,17 @@ class MenuEditor(Gtk.Window):
     def edit_selected(self, *_):
         node = self.selected()
         if node and node.editable:
-            self.edit_form(node)
+            if node in self.origins:
+                node = self.open_origin(node)
+            if node is not None:
+                self.edit_form(node)
 
     def remove_selected(self, *_):
         node = self.selected()
         if (
             node
             and node.editable
+            and node not in self.origins
             and self.confirm(
                 "Delete this entry and any submenu contents? Changes are written when you save."
             )
@@ -546,29 +634,63 @@ class MenuEditor(Gtk.Window):
 
     def move(self, step):
         node = self.selected()
-        if node and self.document.move(node, step):
+        if node and node not in self.origins and self.document.move(node, step):
             self.refresh(node)
 
     def indent(self, *_):
         node = self.selected()
-        if node and self.document.indent(node):
+        if node and node not in self.origins and self.document.indent(node):
             self.refresh(node)
 
     def outdent(self, *_):
         node = self.selected()
-        if node and self.document.outdent(node):
+        if node and node not in self.origins and self.document.outdent(node):
             self.refresh(node)
 
-    def load(self, path):
+    def load(self, path, remember=True):
         if not self.can_discard():
-            return
+            return False
         try:
             document = MenuDocument(path)
         except (OSError, ValueError, ET.ParseError) as exc:
             self.message(str(exc))
             return
+        if remember and document.path != self.document.path:
+            self.history.append(self.document.path)
+        same_file = document.path == self.document.path
         self.document = document
-        self.refresh()
+        self.refresh(reset=same_file)
+        return True
+
+    def go_back(self, *_):
+        if self.history:
+            path = self.history[-1]
+            if self.load(path, remember=False):
+                self.history.pop()
+                self.back_button.set_sensitive(bool(self.history))
+
+    def open_origin(self, node):
+        path = self.origins.get(node)
+        if path is None or not self.load(path):
+            return None
+        found = None
+
+        def find(candidate):
+            nonlocal found
+            if (
+                candidate.span
+                and node.span
+                and candidate.span[:2] == node.span[:2]
+                and candidate.kind == node.kind
+            ):
+                found = candidate
+            for child in candidate.children:
+                find(child)
+
+        find(self.document.root)
+        if found:
+            self.refresh(found)
+        return found
 
     def open_file(self, *_):
         chooser = Gtk.FileChooserDialog(
@@ -588,6 +710,9 @@ class MenuEditor(Gtk.Window):
 
     def open_include(self, *_):
         node = self.selected()
+        if node in self.origins:
+            self.open_origin(node)
+            return
         path = self.document.include_path(node) if node else None
         if path:
             self.load(path)

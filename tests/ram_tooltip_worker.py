@@ -61,8 +61,14 @@ def main():
             os.environ["DISPLAY"] = ":" + os.read(read_fd, 32).decode().strip()
             config = Path(tmp) / "jwmrc"
             ready = Path(tmp) / "ready"
+            swallow = "--swallow" in sys.argv
+            tray = (
+                '<Tray x="0" y="-1" height="30"><Swallow name="jwm_ram" width="72" height="30"/></Tray>'
+                if swallow
+                else ""
+            )
             config.write_text(
-                f"<JWM><StartupCommand>touch {ready}</StartupCommand></JWM>"
+                f"<JWM><StartupCommand>touch {ready}</StartupCommand>{tray}</JWM>"
             )
             wm = subprocess.Popen(
                 ["jwm", "-f", str(config)],
@@ -73,13 +79,21 @@ def main():
             while not ready.exists() and time.monotonic() < deadline:
                 time.sleep(0.02)
             assert ready.exists(), "JWM startup timeout"
-            with patch.object(sys, "argv", ["jwm_ram"]), patch.object(
-                tk.Misc, "mainloop"
-            ):
+            ram_args = ["jwm_ram", "--ramfg", "#123456", "--tooltip-fontsize", "12"] + (
+                ["--no-swap"] if swallow else []
+            )
+            with patch.object(sys, "argv", ram_args), patch.object(tk.Misc, "mainloop"):
                 app = runpy.run_path(
                     str(Path(__file__).resolve().parents[1] / "jwm_ram")
                 )
             root, tooltip = app["root"], app["tooltip"]
+            rows = app["tooltip_rows"]
+            assert set(rows) == set(app["visible"])
+            for name, label in rows.items():
+                assert label.cget("foreground") == getattr(app["args"], name + "fg")
+                assert label.cget("font") == str(app["tooltip_font"])
+            assert rows["ram"].cget("foreground") == "#123456"
+            assert app["uptime_label"].cget("foreground") == app["args"].tooltip_fg
             root.geometry("+100+300")
             active = tk.Toplevel(root)
             active.title("Active application")
@@ -117,6 +131,20 @@ def main():
                     if parent == xroot:
                         return window
                     window = parent
+
+            if swallow:
+                # Tk's wrapper must be a direct child of the tray. A decorated
+                # application would instead have a JWM frame between it and root.
+                wrapper = tree(root.winfo_id())[0]
+                tray_window = tree(wrapper)[0]
+                assert (
+                    tree(tray_window)[0] == xroot
+                ), "Monitor is not embedded in the tray"
+                assert tray_window != xroot, "Monitor is still a top-level window"
+                assert 0 < root.winfo_width() <= 72 and 0 < root.winfo_height() <= 30
+                assert (
+                    root.winfo_rooty() >= root.winfo_screenheight() - 30
+                ), "Monitor is outside the bottom tray"
 
             def focus():
                 window, revert = C.c_ulong(), C.c_int()
