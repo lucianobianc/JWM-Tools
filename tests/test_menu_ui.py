@@ -467,13 +467,14 @@ class MenuUITests(unittest.TestCase):
                     )
                 )
                 action.assert_called_once()
-                self.assertFalse(
+                self.assertEqual(
+                    key == Gdk.KEY_a,
                     self.window.tree_key(
                         self.window.tree,
                         SimpleNamespace(
                             keyval=key, state=Gdk.ModifierType.CONTROL_MASK
                         ),
-                    )
+                    ),
                 )
         self.assertTrue(self.window.buttons["Add entry"].get_use_underline())
         self.assertEqual(self.window.buttons["Add entry"].get_label(), "_Add")
@@ -495,6 +496,13 @@ class MenuUITests(unittest.TestCase):
         "Set JWM_REAL_TESTS=1 for real X11 input",
     )
     def test_real_mouse_drag_moves_entry_into_submenu(self):
+        root = self.window.document.roots()[0]
+        node, target = root.children[1], root.children[0]
+        self.real_mouse_drag("0:1", "0:0")
+        self.assertIs(node.parent, target)
+        self.assertEqual(self.path.read_text(), self.xml)
+
+    def real_mouse_drag(self, source, destination, edge=False):
         import ctypes as C
         import ctypes.util
         import time
@@ -524,18 +532,22 @@ class MenuUITests(unittest.TestCase):
 
         self.window.present()
         pump()
-        root = self.window.document.roots()[0]
-        node = root.children[1]
-        target = root.children[0]
         origin = self.window.tree.get_bin_window().get_origin()
         a = self.window.tree.get_background_area(
-            Gtk.TreePath.new_from_string("0:1"), None
+            Gtk.TreePath.new_from_string(source), None
         )
         b = self.window.tree.get_background_area(
-            Gtk.TreePath.new_from_string("0:0"), None
+            Gtk.TreePath.new_from_string(destination), None
         )
         sx, sy = origin[-2] + 150, origin[-1] + a.y + a.height // 2
         tx, ty = origin[-2] + 150, origin[-1] + b.y + b.height // 2
+
+        if edge:
+            ty = (
+                self.window.tree.get_window().get_origin()[-1]
+                + self.window.tree.get_allocated_height()
+                - 4
+            )
 
         def motion(px, py):
             xt.XTestFakeMotionEvent(display, -1, px, py, 0)
@@ -550,12 +562,12 @@ class MenuUITests(unittest.TestCase):
             for i in range(1, 11):
                 motion(sx + 30 * i // 10, sy + (ty - sy) * i // 10)
             motion(tx, ty)
-            pump(10)
+            pump(60 if edge else 10)
+            during = self.window.scroller.get_vadjustment().get_value()
             xt.XTestFakeButtonEvent(display, 1, False, 0)
             x.XFlush(display)
             pump(20)
-            self.assertIs(node.parent, target)
-            self.assertEqual(self.path.read_text(), self.xml)
+            return during
         finally:
             xt.XTestFakeButtonEvent(display, 1, False, 0)
             x.XFlush(display)
@@ -593,3 +605,217 @@ class MenuUITests(unittest.TestCase):
         self.assertEqual(parent.kind, "RootMenu")
         self.assertEqual(self.window.owner(parent).path, included)
         self.assertIsNone(after)
+
+    def pump(self, count=10):
+        import time
+
+        for _ in range(count):
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+            time.sleep(0.01)
+
+    def test_copy_paste_multiple_entries_preserves_source_and_xml(self):
+        root = self.window.document.roots()[0]
+        second = self.window.document.add(
+            root, "Program", {"label": "Second", "icon": "folder"}, 'printf "a & b"'
+        )
+        self.window.refresh()
+        self.select_many([root.children[1], second])
+        self.window.copy_selection()
+        self.select(root.children[0])
+        self.window.paste_selection()
+        pasted = root.children[0].children
+        self.assertEqual([n.value for n in pasted], ["xterm", 'printf "a & b"'])
+        self.assertIsNot(pasted[1], second)
+        self.assertIn(second, root.children)
+        self.assertEqual(self.path.read_text(), self.xml)
+        self.assertTrue(self.window.save())
+        self.assertIn("&amp;", self.path.read_text())
+
+    def test_cut_paste_moves_selection_and_second_paste_copies(self):
+        root = self.window.document.roots()[0]
+        node = root.children[1]
+        self.select(node)
+        self.window.copy_selection(cut=True)
+        self.assertIn(node, root.children)
+        self.assertFalse(self.window.document.dirty)
+        self.assertTrue(self.window.is_cut(node))
+        self.select(root.children[0])
+        self.window.paste_selection()
+        self.assertIs(node.parent, root.children[0])
+        self.assertFalse(self.window.cut_nodes)
+        self.select(root.children[0])
+        self.window.paste_selection()
+        self.assertEqual(len(root.children[0].children), 2)
+        self.assertIsNot(root.children[0].children[1], node)
+
+    def test_cut_paste_between_includes_writes_both_sources(self):
+        included = Path(self.temp.name) / "paste-target"
+        included.write_text('<JWM><Menu label="Target"/></JWM>')
+        root = self.window.document.roots()[0]
+        self.window.document.update(root.children[2], {}, str(included))
+        self.window.save()
+        root = self.window.document.roots()[0]
+        self.select(root.children[1])
+        self.window.copy_selection(cut=True)
+        target = next(n for n in self.window.origins if n.kind == "Menu")
+        self.select(target)
+        self.window.paste_selection()
+        self.assertEqual(len(self.window.dirty_documents()), 2)
+        self.assertTrue(self.window.save())
+        self.assertNotIn("xterm", self.path.read_text())
+        self.assertIn("xterm", included.read_text())
+
+    def test_cut_cannot_paste_parent_into_itself_and_invalid_clipboard_is_ignored(self):
+        from gi.repository import Gdk
+
+        root = self.window.document.roots()[0]
+        self.select(root.children[0])
+        self.window.copy_selection(cut=True)
+        with patch.object(self.window, "message") as message:
+            self.window.paste_selection()
+            message.assert_called_once()
+        self.assertFalse(self.window.document.dirty)
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text("ordinary text", -1)
+        with patch.object(self.window, "message") as message:
+            self.window.paste_selection()
+            message.assert_called_once()
+        self.assertFalse(self.window.document.dirty)
+
+    def test_undo_redo_delete_and_save_then_undo(self):
+        root = self.window.document.roots()[0]
+        self.select(root.children[1])
+        self.window.remove_selected()
+        self.assertTrue(self.window.document.dirty)
+        self.window.undo()
+        self.assertFalse(self.window.document.dirty)
+        self.window.redo()
+        self.assertTrue(self.window.document.dirty)
+        self.assertTrue(self.window.save())
+        self.window.undo()
+        self.assertTrue(self.window.document.dirty)
+        self.assertTrue(self.window.save())
+        self.assertIn("xterm", self.path.read_text())
+
+    def test_move_preserves_vertical_scroll_position(self):
+        root = self.window.document.roots()[0]
+        for i in range(100):
+            self.window.document.add(root, "Program", {"label": f"Item {i:03}"}, "true")
+        self.window.refresh()
+        self.pump()
+        adjustment = self.window.scroller.get_vadjustment()
+        adjustment.set_value(1000)
+        self.pump()
+        node = root.children[45]
+        self.select(node)
+        before = adjustment.get_value()
+        self.window.move(1)
+        self.pump()
+        self.assertGreater(before, 100)
+        self.assertAlmostEqual(adjustment.get_value(), before, delta=2)
+
+    def test_drag_scrolls_at_edges_and_stops_on_leave(self):
+        root = self.window.document.roots()[0]
+        for i in range(100):
+            self.window.document.add(root, "Program", {"label": f"Long {i}"}, "true")
+        self.window.refresh()
+        self.pump()
+        adjustment = self.window.scroller.get_vadjustment()
+        with patch("jwm_tools.menu.editor.Gdk.drag_status"):
+            self.window.drag_motion(
+                self.window.tree,
+                MagicMock(),
+                100,
+                self.window.tree.get_allocated_height() - 2,
+                0,
+            )
+        self.pump(20)
+        self.assertGreater(adjustment.get_value(), 0)
+        self.window.drag_leave(self.window.tree)
+        self.assertEqual(self.window.drag_scroll_id, 0)
+        before = adjustment.get_value()
+        self.pump()
+        self.assertEqual(adjustment.get_value(), before)
+
+    def test_control_shortcuts_and_text_fields_keep_native_editing(self):
+        from types import SimpleNamespace
+        from gi.repository import Gdk
+
+        for key, method in (
+            (Gdk.KEY_c, "copy_selection"),
+            (Gdk.KEY_v, "paste_selection"),
+            (Gdk.KEY_s, "save"),
+            (Gdk.KEY_z, "undo"),
+            (Gdk.KEY_y, "redo"),
+        ):
+            with patch.object(self.window, method) as action:
+                self.assertTrue(
+                    self.window.tree_key(
+                        self.window.tree,
+                        SimpleNamespace(
+                            keyval=key, state=Gdk.ModifierType.CONTROL_MASK
+                        ),
+                    )
+                )
+                action.assert_called_once()
+        field = Gtk.Entry()
+        with patch.object(self.window, "get_focus", return_value=field), patch.object(
+            self.window, "copy_selection"
+        ) as copy:
+            self.assertFalse(
+                self.window.window_key(
+                    self.window,
+                    SimpleNamespace(
+                        keyval=Gdk.KEY_c, state=Gdk.ModifierType.CONTROL_MASK
+                    ),
+                )
+            )
+            copy.assert_not_called()
+        field.destroy()
+
+    @unittest.skipUnless(
+        os.environ.get("JWM_REAL_TESTS") == "1",
+        "Set JWM_REAL_TESTS=1 for real X11 input",
+    )
+    def test_real_mouse_drag_moves_all_selected_entries_in_order(self):
+        root = self.window.document.roots()[0]
+        first = root.children[1]
+        second = self.window.document.add(root, "Program", {"label": "Second"}, "false")
+        self.window.refresh()
+        self.select_many([first, second])
+        self.real_mouse_drag("0:1", "0:0")
+        self.assertEqual(root.children[0].children, [first, second])
+        self.assertEqual(self.window.selected_nodes(), [first, second])
+
+    @unittest.skipUnless(
+        os.environ.get("JWM_REAL_TESTS") == "1",
+        "Set JWM_REAL_TESTS=1 for real X11 input",
+    )
+    def test_real_mouse_drag_at_edge_scrolls_and_stops_after_drop(self):
+        root = self.window.document.roots()[0]
+        for i in range(100):
+            self.window.document.add(root, "Program", {"label": f"Scroll {i}"}, "true")
+        self.window.refresh()
+        self.pump()
+        self.assertGreater(self.real_mouse_drag("0:1", "0:0", edge=True), 30)
+        self.assertEqual(self.window.drag_scroll_id, 0)
+
+    def test_undo_cut_paste_across_sources_after_saving_restores_both_files(self):
+        included = Path(self.temp.name) / "undo-target"
+        included.write_text('<JWM><Menu label="Target"/></JWM>')
+        root = self.window.document.roots()[0]
+        self.window.document.update(root.children[2], {}, str(included))
+        self.window.save()
+        root = self.window.document.roots()[0]
+        self.select(root.children[1])
+        self.window.copy_selection(cut=True)
+        self.select(next(n for n in self.window.origins if n.kind == "Menu"))
+        self.window.paste_selection()
+        self.assertTrue(self.window.save())
+        self.assertNotIn("xterm", self.path.read_text())
+        self.assertIn("xterm", included.read_text())
+        self.window.undo()
+        self.assertEqual(len(self.window.dirty_documents()), 2)
+        self.assertTrue(self.window.save())
+        self.assertIn("xterm", self.path.read_text())
+        self.assertNotIn("xterm", included.read_text())

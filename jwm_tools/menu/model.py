@@ -66,32 +66,7 @@ class MenuDocument:
             if self.original is not None
             else "<JWM>\n</JWM>\n"
         )
-        element = ET.fromstring(self.text)
-        if element.tag != "JWM":
-            raise ValueError("Expected a JWM root element.")
-        names = {
-            match.group(2)
-            for match in TAG.finditer(masked(self.text))
-            if not match.group(1)
-        }
-        spans = {name: iter(find_elements(self.text, name)) for name in names}
-
-        def build(elem, parent=None):
-            node = Node(
-                elem.tag,
-                dict(elem.attrib),
-                (elem.text or "").strip(),
-                parent=parent,
-                span=next(spans[elem.tag]),
-                source_text=self.text,
-            )
-            node.original_attrs = dict(node.attrs)
-            node.original_value = node.value
-            node.children = [build(child, node) for child in elem]
-            node.original_children = list(node.children)
-            return node
-
-        self.root = build(element)
+        self.root = parse_menu(self.text)
 
     def roots(self):
         rootmenus = [node for node in self.root.children if node.kind == "RootMenu"]
@@ -274,7 +249,10 @@ class MenuDocument:
 
     @property
     def dirty(self):
-        return self.preview() != self.text
+        baseline = (
+            self.original.decode("utf-8") if self.original is not None else self.text
+        )
+        return self.preview() != baseline
 
     def include_path(self, node):
         if node.kind != "Include" or not node.value or node.value.startswith("exec:"):
@@ -283,6 +261,33 @@ class MenuDocument:
 
     def save(self):
         save_documents([self])
+
+
+def parse_menu(text):
+    element = ET.fromstring(text)
+    if element.tag != "JWM":
+        raise ValueError("Expected a JWM root element.")
+    names = {
+        match.group(2) for match in TAG.finditer(masked(text)) if not match.group(1)
+    }
+    spans = {name: iter(find_elements(text, name)) for name in names}
+
+    def build(elem, parent=None):
+        node = Node(
+            elem.tag,
+            dict(elem.attrib),
+            (elem.text or "").strip(),
+            parent=parent,
+            span=next(spans[elem.tag]),
+            source_text=text,
+        )
+        node.original_attrs = dict(node.attrs)
+        node.original_value = node.value
+        node.children = [build(child, node) for child in elem]
+        node.original_children = list(node.children)
+        return node
+
+    return build(element)
 
 
 def save_documents(documents):

@@ -34,16 +34,36 @@ Drag entries onto a submenu to move them inside it, or between rows to reorder.
 Moves between included files remain pending in their respective source files.
 A submenu cannot be moved into itself or one of its descendants. **Move up**,
 **Move down**, **Indent** and **Outdent** remain available for a single entry.
-Collapsed submenus stay collapsed when editing elsewhere.
+Collapsed submenus stay collapsed when editing elsewhere. Move up/down and other
+updates preserve the current scroll position. During a drag, holding the pointer
+near the top or bottom edge scrolls the tree automatically. Multiple selected
+entries move together in their current order.
 
 | Shortcut | Action |
 | --- | --- |
+| Ctrl+C | Copy selected entries |
+| Ctrl+X | Cut selected entries |
+| Ctrl+V | Paste into a submenu or after an entry |
+| Ctrl+A | Select all |
+| Ctrl+S | Save |
+| Ctrl+Z | Undo |
+| Ctrl+Shift+Z or Ctrl+Y | Redo |
+| Escape | Cancel a pending cut |
 | A or Alt+A | Add |
 | E, Alt+E or F2 | Edit |
 | Delete, D or Alt+D | Delete selected entries |
 
 Letter shortcuts apply in the menu editor, not in text fields. Underlined button
 letters indicate Alt shortcuts; GTK may show the underline when Alt is pressed.
+
+Copy, Cut and Paste also have toolbar buttons. Cutting dims the entries and
+moves them only when pasted. Copy/paste works with submenus, multiple selections
+and included files, preserving their XML. The clipboard contains a JWM XML
+fragment that can also be pasted into another editor instance. Text fields retain
+their normal clipboard shortcuts.
+
+Undo and redo cover recent edits across source files, including changes already
+saved. They do not write files until Save is pressed again.
 
 ## Saving
 

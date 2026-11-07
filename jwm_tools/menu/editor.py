@@ -2,6 +2,9 @@
 
 from pathlib import Path
 import difflib
+import copy
+from contextlib import contextmanager
+import uuid
 import shlex
 import subprocess
 import xml.etree.ElementTree as ET
@@ -17,6 +20,7 @@ from .model import (
     save_documents,
     topmost_nodes,
     transfer_nodes,
+    parse_menu,
 )
 from ..startup.editor import ApplicationDialog, StartupEditor
 from ..iconpicker import choose_icon
@@ -252,6 +256,16 @@ class MenuEditor(Gtk.Window):
         self.documents = {self.document.path: self.document}
         self.origins = {}
         self.drag_nodes = []
+        self.press_drag_nodes = []
+        self.cut_nodes = []
+        self.undo_stack = []
+        self.redo_stack = []
+        self.clipboard_payload = None
+        self.drag_scroll_id = 0
+        self.drag_scroll_speed = 0
+        self.scroll_restore_id = 0
+        self.scroll_restore_value = None
+        self.scroll_restore_horizontal = None
         self.tree_states = {}
         self.tree_document_path = None
         self.set_default_size(1080, 650)
@@ -271,11 +285,15 @@ class MenuEditor(Gtk.Window):
             button.connect("clicked", callback)
             header.add(button)
         box.pack_start(header, False, False, 0)
-        self.store = Gtk.TreeStore(object, GdkPixbuf.Pixbuf, str, str, str, str)
+        self.store = Gtk.TreeStore(object, GdkPixbuf.Pixbuf, str, str, str, str, bool)
         self.tree = Gtk.TreeView(model=self.store)
         self.tree.set_tooltip_column(5)
         self.tree.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
         self.tree.connect("key-press-event", self.tree_key)
+        self.tree.connect("button-press-event", self.drag_press)
+        self.tree.connect(
+            "button-release-event", lambda *_: self.press_drag_nodes.clear()
+        )
         targets = [
             Gtk.TargetEntry.new(
                 "application/x-jwm-menu-entry", Gtk.TargetFlags.SAME_WIDGET, 0
@@ -285,9 +303,7 @@ class MenuEditor(Gtk.Window):
             Gdk.ModifierType.BUTTON1_MASK, targets, Gdk.DragAction.MOVE
         )
         self.tree.enable_model_drag_dest(targets, Gdk.DragAction.MOVE)
-        self.tree.connect(
-            "drag-begin", lambda *_: setattr(self, "drag_nodes", self.selected_roots())
-        )
+        self.tree.connect("drag-begin", self.drag_begin)
         self.tree.connect(
             "drag-data-get",
             lambda _w, _c, data, _i, _t: data.set(
@@ -296,12 +312,8 @@ class MenuEditor(Gtk.Window):
         )
         self.tree.connect("drag-motion", self.drag_motion)
         self.tree.connect("drag-drop", self.drag_drop)
-        self.tree.connect(
-            "drag-leave",
-            lambda widget, *_: widget.set_drag_dest_row(
-                None, Gtk.TreeViewDropPosition.BEFORE
-            ),
-        )
+        self.tree.connect("drag-leave", self.drag_leave)
+        self.tree.connect("drag-end", lambda *_: self.stop_drag_scroll())
         self.tree.connect("drag-data-received", self.drop_received)
         column = Gtk.TreeViewColumn("Menu entry")
         icon = Gtk.CellRendererPixbuf()
@@ -309,7 +321,9 @@ class MenuEditor(Gtk.Window):
         column.add_attribute(icon, "pixbuf", 1)
         text = Gtk.CellRendererText()
         text.props.ellipsize = 3
+        text.props.foreground = "#888888"
         column.pack_start(text, True)
+        column.add_attribute(text, "foreground-set", 6)
         column.add_attribute(text, "text", 2)
         column.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
         column.set_fixed_width(400)
@@ -337,16 +351,20 @@ class MenuEditor(Gtk.Window):
             "changed", lambda *_: self.selection_changed()
         )
         scroll = Gtk.ScrolledWindow()
+        self.scroller = scroll
         scroll.add(self.tree)
         box.pack_start(scroll, True, True, 0)
         actions = Gtk.FlowBox()
         actions.set_selection_mode(Gtk.SelectionMode.NONE)
-        actions.set_max_children_per_line(9)
+        actions.set_max_children_per_line(10)
         self.buttons = {}
         for label, callback in (
             ("Add entry", self.add_entry),
             ("Edit", self.edit_selected),
             ("Delete", self.remove_selected),
+            ("Cut", lambda *_: self.copy_selection(cut=True)),
+            ("Copy", lambda *_: self.copy_selection()),
+            ("Paste", lambda *_: self.paste_selection()),
             ("Move up", lambda *_: self.move(-1)),
             ("Move down", lambda *_: self.move(1)),
             ("Indent", self.indent),
@@ -391,6 +409,7 @@ class MenuEditor(Gtk.Window):
         box.pack_start(footer, False, False, 0)
         self.tree.set_can_focus(True)
         self.connect("key-press-event", self.window_key)
+        self.connect("destroy", self.cleanup)
         self.connect("delete-event", lambda *_: not self.can_discard())
         self.refresh()
 
@@ -437,13 +456,32 @@ class MenuEditor(Gtk.Window):
         return self.tree_key(self.tree, event)
 
     def tree_key(self, _widget, event):
-        if event.state & (
-            Gdk.ModifierType.CONTROL_MASK
-            | Gdk.ModifierType.MOD1_MASK
-            | Gdk.ModifierType.SUPER_MASK
-        ):
-            return False
         key = Gdk.keyval_to_lower(event.keyval)
+        if event.state & (Gdk.ModifierType.MOD1_MASK | Gdk.ModifierType.SUPER_MASK):
+            return False
+        if event.state & Gdk.ModifierType.CONTROL_MASK:
+            action = {
+                Gdk.KEY_c: self.copy_selection,
+                Gdk.KEY_x: lambda: self.copy_selection(cut=True),
+                Gdk.KEY_v: self.paste_selection,
+                Gdk.KEY_s: self.save,
+                Gdk.KEY_a: self.tree.get_selection().select_all,
+                Gdk.KEY_z: (
+                    self.redo
+                    if event.state & Gdk.ModifierType.SHIFT_MASK
+                    else self.undo
+                ),
+                Gdk.KEY_y: self.redo,
+            }.get(key)
+            if action is None:
+                return False
+            action()
+            return True
+        if key == Gdk.KEY_Escape and self.cut_nodes:
+            self.cut_nodes = []
+            self.clipboard_payload = None
+            self.refresh()
+            return True
         action = {
             Gdk.KEY_Delete: self.remove_selected,
             Gdk.KEY_KP_Delete: self.remove_selected,
@@ -457,6 +495,119 @@ class MenuEditor(Gtk.Window):
         action()
         return True
 
+    @contextmanager
+    def change(self):
+        before = {path: document.preview() for path, document in self.documents.items()}
+        snapshot = copy.deepcopy((self.documents, self.document.path))
+        yield
+        after = {path: document.preview() for path, document in self.documents.items()}
+        if before != after:
+            self.undo_stack.append(snapshot)
+            self.undo_stack = self.undo_stack[-30:]
+            self.redo_stack.clear()
+
+    def restore_history(self, source, destination):
+        if not source:
+            return
+        destination.append(copy.deepcopy((self.documents, self.document.path)))
+        baselines = {
+            path: document.original for path, document in self.documents.items()
+        }
+        documents, path = source.pop()
+        for filename, document in documents.items():
+            if filename in baselines:
+                document.original = baselines[filename]
+        self.documents = documents
+        self.document = documents[path]
+        self.cut_nodes = []
+        self.clipboard_payload = None
+        self.refresh()
+
+    def undo(self):
+        self.restore_history(self.undo_stack, self.redo_stack)
+
+    def redo(self):
+        self.restore_history(self.redo_stack, self.undo_stack)
+
+    def copy_selection(self, cut=False):
+        nodes = topmost_nodes(self.selected_roots())
+        if not nodes or (cut and any(not node.editable for node in nodes)):
+            return
+        payload = (
+            "<JWM><!-- clipboard:"
+            + uuid.uuid4().hex
+            + " -->"
+            + "".join(self.owner(node).render(node) for node in nodes)
+            + "</JWM>"
+        )
+        self.clipboard_payload = payload if cut else None
+        self.cut_nodes = nodes if cut else []
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(payload, -1)
+        clipboard.store()
+        self.refresh(nodes)
+
+    def paste_selection(self):
+        payload = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text()
+        if not payload:
+            return
+        try:
+            copied = parse_menu(payload).children
+            if not copied or any(
+                node.kind not in (*KINDS, "RootMenu") for node in copied
+            ):
+                raise ValueError("The clipboard does not contain JWM menu entries.")
+            parent, after = self.destination()
+            if all(node.kind == "RootMenu" for node in copied):
+                after = self.selected()
+                parent = (
+                    self.owner(after).root if after is not None else self.document.root
+                )
+                if after is not None and after.parent is not parent:
+                    after = None
+            document = self.owner(parent)
+            index = (
+                len(parent.children)
+                if after is None
+                else parent.children.index(after) + 1
+            )
+            for node in copied:
+                document.require_container(parent, node.kind)
+            with self.change():
+                if self.cut_nodes and payload == self.clipboard_payload:
+                    if any(
+                        node.parent is None or node not in node.parent.children
+                        for node in self.cut_nodes
+                    ):
+                        raise ValueError(
+                            "The cut selection changed. Cut the entries again."
+                        )
+                    for node in self.cut_nodes:
+                        self.owner(node)
+                    pasted = transfer_nodes(self.cut_nodes, parent, index, document)
+                    # Subsequent pastes copy the snapshot rather than moving it again.
+                    self.cut_nodes = []
+                    self.clipboard_payload = None
+                else:
+                    pasted = copied
+                    for offset, node in enumerate(pasted):
+                        node.parent = parent
+                        parent.children.insert(index + offset, node)
+                    self.cut_nodes = []
+                    self.clipboard_payload = None
+            self.refresh(pasted)
+        except (ValueError, ET.ParseError, StopIteration):
+            self.message(
+                "The clipboard entry cannot be pasted here. Select a valid destination; if the cut selection changed, cut it again."
+            )
+
+    def is_cut(self, node):
+        while node is not None:
+            if node in self.cut_nodes:
+                return True
+            node = node.parent
+        return False
+
     def selection_changed(self):
         nodes = self.selected_nodes()
         node = nodes[0] if len(nodes) == 1 else None
@@ -467,17 +618,83 @@ class MenuEditor(Gtk.Window):
         self.buttons["Delete"].set_sensitive(
             bool(roots) and all(n.editable for n in roots)
         )
+        self.buttons["Copy"].set_sensitive(bool(nodes))
+        self.buttons["Cut"].set_sensitive(
+            bool(roots) and all(n.editable for n in roots)
+        )
         for label in ("Move up", "Move down", "Indent", "Outdent"):
             self.buttons[label].set_sensitive(bool(node and node.editable))
+
+    def drag_press(self, widget, event):
+        self.press_drag_nodes = []
+        if event.button == 1 and not event.state & (
+            Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+        ):
+            hit = widget.get_path_at_pos(int(event.x), int(event.y))
+            if hit and widget.get_selection().path_is_selected(hit[0]):
+                self.press_drag_nodes = self.selected_roots()
+        return False
+
+    def drag_begin(self, _widget, _context):
+        self.drag_nodes = list(self.press_drag_nodes or self.selected_roots())
+        if len(self.drag_nodes) > 1:
+            selection = self.tree.get_selection()
+            selection.unselect_all()
+
+            def select(model, path, it, _data):
+                if model[it][0] in self.drag_nodes:
+                    selection.select_path(path)
+
+            self.store.foreach(select, None)
+
+    def cleanup(self, *_):
+        self.stop_drag_scroll()
+        if self.scroll_restore_id:
+            GLib.source_remove(self.scroll_restore_id)
+            self.scroll_restore_id = 0
+
+    def stop_drag_scroll(self):
+        self.drag_scroll_speed = 0
+        if self.drag_scroll_id:
+            GLib.source_remove(self.drag_scroll_id)
+            self.drag_scroll_id = 0
+
+    def drag_leave(self, widget, *_):
+        self.stop_drag_scroll()
+        widget.set_drag_dest_row(None, Gtk.TreeViewDropPosition.BEFORE)
+
+    def drag_scroll_tick(self):
+        adjustment = self.scroller.get_vadjustment()
+        limit = max(
+            adjustment.get_lower(), adjustment.get_upper() - adjustment.get_page_size()
+        )
+        adjustment.set_value(
+            max(
+                adjustment.get_lower(),
+                min(limit, adjustment.get_value() + self.drag_scroll_speed),
+            )
+        )
+        return bool(self.drag_scroll_speed)
 
     def drag_motion(self, widget, context, x, y, timestamp):
         hit = widget.get_dest_row_at_pos(x, y)
         if hit:
             widget.set_drag_dest_row(*hit)
+        else:
+            widget.set_drag_dest_row(None, Gtk.TreeViewDropPosition.BEFORE)
+        height = widget.get_allocated_height()
+        margin = 40
+        self.drag_scroll_speed = -18 if y < margin else 18 if y > height - margin else 0
+        if self.drag_scroll_speed:
+            if not self.drag_scroll_id:
+                self.drag_scroll_id = GLib.timeout_add(40, self.drag_scroll_tick)
+        else:
+            self.stop_drag_scroll()
         Gdk.drag_status(context, Gdk.DragAction.MOVE, timestamp)
         return True
 
     def drag_drop(self, widget, context, _x, _y, timestamp):
+        self.stop_drag_scroll()
         target = widget.drag_dest_find_target(context, None)
         if target:
             widget.drag_get_data(context, target, timestamp)
@@ -495,6 +712,7 @@ class MenuEditor(Gtk.Window):
         return roots[0] if roots else document.root
 
     def drop_received(self, widget, context, x, y, _data, _info, timestamp):
+        self.stop_drag_scroll()
         hit = widget.get_dest_row_at_pos(x, y)
         success = False
         try:
@@ -527,8 +745,11 @@ class MenuEditor(Gtk.Window):
                             Gtk.TreeViewDropPosition.INTO_OR_AFTER,
                         )
                     )
-            moved = transfer_nodes(self.drag_nodes, parent, index, self.owner(parent))
-            self.refresh(moved[0] if moved else None)
+            with self.change():
+                moved = transfer_nodes(
+                    self.drag_nodes, parent, index, self.owner(parent)
+                )
+            self.refresh(moved)
             success = bool(moved)
         except (ValueError, StopIteration) as exc:
             self.message(str(exc))
@@ -537,6 +758,26 @@ class MenuEditor(Gtk.Window):
             self.drag_nodes = []
 
     def refresh(self, selected=None, reset=False):
+        old_scroll = (
+            self.scroll_restore_value
+            if self.scroll_restore_value is not None
+            else self.scroller.get_vadjustment().get_value()
+        )
+        old_horizontal = (
+            self.scroll_restore_horizontal
+            if self.scroll_restore_horizontal is not None
+            else self.scroller.get_hadjustment().get_value()
+        )
+        same_view = self.tree_document_path == self.document.path and not reset
+        if self.scroll_restore_id:
+            GLib.source_remove(self.scroll_restore_id)
+            self.scroll_restore_id = 0
+        chosen = set(
+            selected
+            if isinstance(selected, (list, tuple))
+            else [selected] if selected is not None else []
+        )
+
         def key(node, source):
             return (source, node.kind, node.span[:2] if node.span else id(node))
 
@@ -582,6 +823,7 @@ class MenuEditor(Gtk.Window):
                     node.kind + (" · included" if foreign else ""),
                     node.value,
                     str(document.path),
+                    self.is_cut(node),
                 ],
             )
             for child in node.children:
@@ -604,7 +846,7 @@ class MenuEditor(Gtk.Window):
                             warnings.append(f"Cannot read Include {path}: {exc}")
             if restore is not None and key(node, str(document.path)) in restore:
                 expand_paths.append(self.store.get_path(it))
-            if node is selected:
+            if node in chosen:
                 path = self.store.get_path(it)
                 selected_paths.append(path)
 
@@ -636,6 +878,36 @@ class MenuEditor(Gtk.Window):
         self.status.set_line_wrap(True)
         self.status.set_max_width_chars(105)
         self.selection_changed()
+        if same_view:
+            self.scroll_restore_value = old_scroll
+            self.scroll_restore_horizontal = old_horizontal
+            self.scroll_restore_id = GLib.idle_add(
+                self.restore_scroll, priority=GLib.PRIORITY_LOW
+            )
+        else:
+            self.scroll_restore_value = None
+            self.scroll_restore_horizontal = None
+
+    def restore_scroll(self):
+        adjustment = self.scroller.get_vadjustment()
+        limit = max(
+            adjustment.get_lower(), adjustment.get_upper() - adjustment.get_page_size()
+        )
+        adjustment.set_value(min(self.scroll_restore_value or 0, limit))
+        horizontal = self.scroller.get_hadjustment()
+        horizontal.set_value(
+            min(
+                self.scroll_restore_horizontal or 0,
+                max(
+                    horizontal.get_lower(),
+                    horizontal.get_upper() - horizontal.get_page_size(),
+                ),
+            )
+        )
+        self.scroll_restore_value = None
+        self.scroll_restore_horizontal = None
+        self.scroll_restore_id = 0
+        return False
 
     def destination(self):
         node = self.selected()
@@ -690,8 +962,9 @@ class MenuEditor(Gtk.Window):
         if self.confirm(
             "Clear all entries in this menu, including submenus? This stays pending until you save. Other configuration and Include files are kept."
         ):
-            for child in children:
-                target.children.remove(child)
+            with self.change():
+                for child in children:
+                    target.children.remove(child)
             self.refresh(target if target is not self.document.root else None)
 
     def generation_mode(self, count):
@@ -742,15 +1015,18 @@ class MenuEditor(Gtk.Window):
                 return node
 
             generated = [build(child, target) for child in tree]
-            if mode == "add":
-                target.children.extend(generated)
-            elif target is self.owner(target).root:
-                retained = [
-                    n for n in target.children if n not in self.owner(target).roots()
-                ]
-                target.children = retained + generated
-            else:
-                target.children = generated
+            with self.change():
+                if mode == "add":
+                    target.children.extend(generated)
+                elif target is self.owner(target).root:
+                    retained = [
+                        n
+                        for n in target.children
+                        if n not in self.owner(target).roots()
+                    ]
+                    target.children = retained + generated
+                else:
+                    target.children = generated
             self.refresh(target if target is not self.document.root else None)
         except (OSError, ValueError, ET.ParseError) as exc:
             self.message(str(exc))
@@ -762,13 +1038,15 @@ class MenuEditor(Gtk.Window):
                 try:
                     kind, attrs, value = dialog.candidate()
                     if node:
-                        self.owner(node).update(node, attrs, value)
+                        with self.change():
+                            self.owner(node).update(node, attrs, value)
                         selected = node
                     else:
                         parent, after = self.destination()
-                        selected = self.owner(parent).add(
-                            parent, kind, attrs, value, after
-                        )
+                        with self.change():
+                            selected = self.owner(parent).add(
+                                parent, kind, attrs, value, after
+                            )
                     self.refresh(selected)
                     break
                 except (ValueError, ET.ParseError) as exc:
@@ -809,7 +1087,8 @@ class MenuEditor(Gtk.Window):
             while dialog.run() == Gtk.ResponseType.OK:
                 try:
                     kind, attrs, value = dialog.candidate()
-                    node = self.document.add(self.document.root, kind, attrs, value)
+                    with self.change():
+                        node = self.document.add(self.document.root, kind, attrs, value)
                     self.refresh(node)
                     break
                 except ValueError as exc:
@@ -826,24 +1105,34 @@ class MenuEditor(Gtk.Window):
         nodes = topmost_nodes(self.selected_roots())
         if not nodes or any(not node.editable for node in nodes):
             return
-        for node in nodes:
-            self.owner(node).remove(node)
+        with self.change():
+            for node in nodes:
+                self.owner(node).remove(node)
         self.refresh()
 
     def move(self, step):
         node = self.selected()
-        if node and self.owner(node).move(node, step):
-            self.refresh(node)
+        if node:
+            with self.change():
+                moved = self.owner(node).move(node, step)
+            if moved:
+                self.refresh(node)
 
     def indent(self, *_):
         node = self.selected()
-        if node and self.owner(node).indent(node):
-            self.refresh(node)
+        if node:
+            with self.change():
+                moved = self.owner(node).indent(node)
+            if moved:
+                self.refresh(node)
 
     def outdent(self, *_):
         node = self.selected()
-        if node and self.owner(node).outdent(node):
-            self.refresh(node)
+        if node:
+            with self.change():
+                moved = self.owner(node).outdent(node)
+            if moved:
+                self.refresh(node)
 
     def load(self, path):
         path = Path(path).expanduser().resolve()
@@ -854,6 +1143,10 @@ class MenuEditor(Gtk.Window):
             if same_file:
                 document = MenuDocument(path)
                 self.documents = {path: document}
+                self.undo_stack.clear()
+                self.redo_stack.clear()
+                self.cut_nodes = []
+                self.clipboard_payload = None
             else:
                 document = self.documents.get(path) or MenuDocument(path)
                 self.documents[path] = document
@@ -884,6 +1177,10 @@ class MenuEditor(Gtk.Window):
         if self.can_discard():
             self.document = MenuDocument(self.document.path)
             self.documents = {self.document.path: self.document}
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self.cut_nodes = []
+            self.clipboard_payload = None
             self.refresh(reset=True)
 
     def show_changes(self, *_):
@@ -891,7 +1188,11 @@ class MenuEditor(Gtk.Window):
             diff = "".join(
                 "".join(
                     difflib.unified_diff(
-                        document.text.splitlines(keepends=True),
+                        (
+                            document.original.decode("utf-8")
+                            if document.original is not None
+                            else document.text
+                        ).splitlines(keepends=True),
                         document.preview().splitlines(keepends=True),
                         fromfile=str(document.path),
                         tofile=str(document.path) + " (changed)",
