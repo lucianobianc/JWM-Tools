@@ -10,10 +10,10 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Pango
-from jwm_style.editor import Editor
-from jwm_style.themes import PRESETS, STYLES
-from jwm_style.buttons import ButtonConfig
-from jwm_style.render import draw_window
+from jwm_tools.style.editor import Editor
+from jwm_tools.style.themes import STYLES, CURRENT_STYLE
+from jwm_tools.style.buttons import ButtonConfig
+from jwm_tools.style.render import draw_window
 
 
 def pump():
@@ -37,7 +37,10 @@ class EditorTests(unittest.TestCase):
         )
         self.hook.start()
         self.addCleanup(self.hook.stop)
-        self.editor = Editor(self.path)
+        with patch(
+            "jwm_tools.style.editor.CUSTOM_DIR", Path(self.temp.name) / "styles"
+        ):
+            self.editor = Editor(self.path)
         self.editor.show_all()
         pump()
         self.addCleanup(self.editor.destroy)
@@ -67,7 +70,7 @@ class EditorTests(unittest.TestCase):
         entry, button = row.get_children()
         selected = str(Path(self.temp.name) / "Start & menu.png")
         Path(selected).touch()
-        with patch("jwm_style.editor.Gtk.FileChooserDialog") as chooser:
+        with patch("jwm_tools.style.editor.Gtk.FileChooserDialog") as chooser:
             dialog = chooser.return_value
             dialog.run.return_value = Gtk.ResponseType.OK
             dialog.get_filename.return_value = selected
@@ -77,7 +80,7 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(self.editor.start_pending["icon"], selected)
         self.assertEqual(self.path.read_bytes(), self.original)
         self.assertTrue(self.editor.write())
-        from jwm_style.config import start_attributes
+        from jwm_tools.style.config import start_attributes
 
         self.assertEqual(start_attributes(self.path.read_text())["icon"], selected)
 
@@ -85,7 +88,7 @@ class EditorTests(unittest.TestCase):
         self.editor.section.set_active(len(STYLES))
         entry, button = self.editor.grid.get_child_at(1, 1).get_children()
         entry.set_text("existing-icon")
-        with patch("jwm_style.editor.Gtk.FileChooserDialog") as chooser:
+        with patch("jwm_tools.style.editor.Gtk.FileChooserDialog") as chooser:
             dialog = chooser.return_value
             dialog.run.return_value = Gtk.ResponseType.CANCEL
             button.emit("clicked")
@@ -105,7 +108,7 @@ class EditorTests(unittest.TestCase):
         chooser.set_active_id("flat")
         self.assertEqual(self.path.read_bytes(), self.original)
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 600, 400)
-        with patch("jwm_style.preview.draw_window") as draw:
+        with patch("jwm_tools.style.preview.draw_window") as draw:
             self.editor.draw_preview(self.editor.preview, cairo.Context(surface))
             self.assertEqual(draw.call_args.args[7].decorations, "flat")
         self.assertTrue(self.editor.write())
@@ -147,10 +150,11 @@ class EditorTests(unittest.TestCase):
         )
         self.assertEqual(self.path.read_bytes(), self.original)
 
-    def test_all_presets_modes_and_window_states_render_without_writing(self):
-        for name in PRESETS:
-            choices = self.editor.visible_presets()
-            self.editor.presets.set_active(choices.index(name))
+    def test_no_builtins_and_current_configuration_renders_without_writing(self):
+        self.assertEqual(self.editor.visible_presets(), [CURRENT_STYLE])
+        self.assertFalse(hasattr(self.editor, "category"))
+        for i in range(len(STYLES) + 1):
+            self.editor.section.set_active(i)
             for mode in (0, 1):
                 self.editor.preview_mode.set_active(mode)
                 self.editor.preview_maximized.set_active(bool(mode))
@@ -158,6 +162,22 @@ class EditorTests(unittest.TestCase):
                 self.editor.draw_preview(self.editor.preview, cairo.Context(surface))
         self.assertEqual(self.path.read_bytes(), self.original)
         self.assertFalse(self.path.with_name("jwmrc.bak").exists())
+
+    def test_saved_custom_style_can_be_selected_without_writing_jwmrc(self):
+        self.editor.store.save(
+            "Meu estilo",
+            {"WindowStyle": {"Foreground": "#CCEEFF", "@decorations": "flat"}},
+        )
+        self.editor.refresh_presets()
+        self.assertEqual(self.editor.visible_presets(), [CURRENT_STYLE, "Meu estilo"])
+        self.editor.presets.set_active(1)
+        self.assertEqual(
+            self.editor.pending[("WindowStyle", ("Foreground",))], "#CCEEFF"
+        )
+        self.assertEqual(self.path.read_bytes(), self.original)
+        self.editor.on_reset()
+        self.assertEqual(self.editor.pending, {})
+        self.assertEqual(self.editor.presets.get_active_text(), CURRENT_STYLE)
 
     def test_preview_clips_to_allocated_bounds(self):
         class Bounds:
@@ -193,7 +213,7 @@ class EditorTests(unittest.TestCase):
 
     def test_apply_writes_then_requests_jwm_restart(self):
         self.editor.pending[("WindowStyle", ("Width",))] = "6"
-        with patch("jwm_style.editor.subprocess.run") as run:
+        with patch("jwm_tools.style.editor.subprocess.run") as run:
             run.return_value.returncode = 0
             self.editor.on_apply()
             self.assertEqual(run.call_args.args[0], ["jwm", "-restart"])
@@ -202,7 +222,8 @@ class EditorTests(unittest.TestCase):
     def test_restart_failure_reports_saved_configuration(self):
         self.editor.pending[("WindowStyle", ("Width",))] = "6"
         with patch(
-            "jwm_style.editor.subprocess.run", side_effect=OSError("JWM unavailable")
+            "jwm_tools.style.editor.subprocess.run",
+            side_effect=OSError("JWM unavailable"),
         ), patch.object(self.editor, "error") as error:
             self.editor.on_apply()
             self.assertIn(

@@ -2,9 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-import xml.etree.ElementTree as ET
-from jwm_style.themes import PRESETS, preset_values, StyleStore
-from jwm_style.config import flatten, update_style
+from jwm_tools.style.themes import CURRENT_STYLE, StyleStore
 
 
 class ThemeTests(unittest.TestCase):
@@ -13,18 +11,14 @@ class ThemeTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.store = StyleStore(self.temp.name)
 
-    def test_all_34_presets_can_be_applied_to_empty_config(self):
-        self.assertEqual(len(PRESETS), 34)
-        for name in PRESETS:
-            with self.subTest(name=name):
-                text = "<JWM><!--do not lose--></JWM>"
-                for (section, path), value in flatten(preset_values(name)).items():
-                    text = update_style(text, section, path, value)
-                self.assertIn("<!--do not lose-->", text)
-                ET.fromstring(text)
-
     def test_save_reload_rename_delete_preserves_old_schema(self):
-        values = preset_values("CDE Pastel")
+        values = {
+            "WindowStyle": {
+                "Foreground": "#FFFFFF",
+                "Background": "#123456",
+                "@decorations": "motif",
+            }
+        }
         path = self.store.save("My theme", values)
         payload = json.loads(path.read_text())
         payload["legacyMetadata"] = "keep"
@@ -36,12 +30,12 @@ class ThemeTests(unittest.TestCase):
         self.store.delete("New theme")
         self.assertEqual(self.store.load(), {})
 
-    def test_slug_collision_and_builtin_names_rejected(self):
+    def test_slug_collision_and_reserved_names_rejected(self):
         self.store.save("A B", {})
         with self.assertRaises(ValueError):
             self.store.save("A-B", {})
         with self.assertRaises(ValueError):
-            self.store.save("CDE Pastel", {})
+            self.store.save(CURRENT_STYLE, {})
         with self.assertRaises(ValueError):
             self.store.save("../escape", {})
 
@@ -59,3 +53,7 @@ class ThemeTests(unittest.TestCase):
         )
         (base / "bad.json").write_text("{")
         self.assertEqual(list(self.store.load()), ["Legacy"])
+
+    def test_former_builtin_name_is_available_for_a_personal_style(self):
+        self.store.save("Phosphor", {"WindowStyle": {"Font": "Monospace-10"}})
+        self.assertIn("Phosphor", self.store.load())

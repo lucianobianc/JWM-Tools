@@ -15,7 +15,7 @@ gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, Gtk
 import pulsectl
 
-LOG = logging.getLogger('audiotray')
+LOG = logging.getLogger('jwm_audio')
 
 
 def percentage(obj):
@@ -107,7 +107,7 @@ class VolumeRow:
 class AudioTray:
     def __init__(self, args):
         self.args = args
-        self.pulse = pulsectl.Pulse('audiotray-control')
+        self.pulse = pulsectl.Pulse('jwm_audio_control')
         self.closed = threading.Event()
         self.refresh_pending = False
         self.sinks = {}
@@ -134,7 +134,7 @@ class AudioTray:
 
         # A compact, fixed-size popup. It never shares geometry with the mixer.
         self.popup = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
-        self.popup.set_title('AudioTray')
+        self.popup.set_title('jwm_audio')
         self.popup.set_decorated(False)
         self.popup.set_resizable(False)
         self.popup.set_skip_taskbar_hint(True)
@@ -191,7 +191,7 @@ class AudioTray:
 
         # A normal top-level window, managed independently by JWM.
         self.mixer = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
-        self.mixer.set_title('AudioTray — Mixer')
+        self.mixer.set_title('jwm_audio — Mixer')
         self.mixer.set_position(Gtk.WindowPosition.CENTER)
         self.mixer.set_default_size(500, 650)
         self.mixer.set_size_request(360, 320)
@@ -215,6 +215,8 @@ class AudioTray:
         label.set_xalign(0)
         content.pack_start(label, False, False, 0)
         self.stream_scroller = Gtk.ScrolledWindow()
+        self.stream_scroller.get_style_context().add_class('jwm_audio_applications')
+        self.stream_scroller.set_shadow_type(Gtk.ShadowType.NONE)
         self.stream_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.stream_scroller.set_min_content_height(230)
         self.stream_scroller.set_vexpand(True)
@@ -248,7 +250,15 @@ class AudioTray:
         content.pack_start(self.mic_row.root, False, False, 0)
 
         css = Gtk.CssProvider()
-        css.load_from_data(b'scale.amplified highlight { background-color: #c87536; }')
+        css.load_from_data(b"""
+            scale.amplified highlight { background-color: #c87536; }
+            /* Let the mixer window's theme background show through the list. */
+            scrolledwindow.jwm_audio_applications,
+            scrolledwindow.jwm_audio_applications viewport {
+                background-color: transparent;
+                background-image: none;
+            }
+        """)
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
@@ -270,7 +280,7 @@ class AudioTray:
         """Dedicated connection: pulsectl objects must not be shared across threads."""
         while not self.closed.is_set():
             try:
-                with pulsectl.Pulse('audiotray-events') as listener:
+                with pulsectl.Pulse('jwm_audio_events') as listener:
                     listener.event_mask_set('all')
                     listener.event_callback_set(lambda _: GLib.idle_add(self.schedule_refresh))
                     while not self.closed.is_set():
@@ -507,6 +517,8 @@ class AudioTray:
         for sid in incoming - existing:
             stream = self.streams[sid]
             block = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+            separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+            block.pack_start(separator, False, False, 3)
             header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             app_icon = Gtk.Image.new_from_icon_name('audio-x-generic', Gtk.IconSize.DND)
             app_icon.set_pixel_size(24)
@@ -525,8 +537,11 @@ class AudioTray:
             route.connect('changed', lambda widget, idx=sid: self.route_stream(idx, widget))
             block.pack_start(route, False, False, 0)
             self.stream_box.pack_start(block, False, False, 0)
-            self.stream_rows[sid] = dict(root=block, name=name, icon=app_icon, row=row, route=route)
+            self.stream_rows[sid] = dict(root=block, separator=separator, name=name, icon=app_icon, row=row, route=route)
             block.show_all()
+        # Follow the surviving row order when streams appear or disappear.
+        for position, widgets in enumerate(self.stream_rows.values()):
+            widgets['separator'].set_visible(position > 0)
         for sid, stream in self.streams.items():
             widgets = self.stream_rows[sid]
             widgets['name'].set_text(self.stream_name(stream))
@@ -665,7 +680,9 @@ class AudioTray:
 
 
 def parse_args():
+    from jwm_tools import __version__
     ap = argparse.ArgumentParser(description='GTK3 systray mixer for PulseAudio on X11')
+    ap.add_argument('--version', action='version', version='jwm_audio ' + __version__)
     ap.add_argument('--max-volume', type=int, default=150, help='Maximum volume percent (default 150)')
     ap.add_argument('--volume-step', type=int, default=5, help='Mouse-wheel volume increment (default 5)')
     ap.add_argument('--dark-mode', action='store_true', help='Prefer a dark GTK theme')

@@ -5,9 +5,9 @@ import gi
 
 gi.require_version("Pango", "1.0")
 from gi.repository import Pango
-from jwm_style.fonts import jwm_to_pango, pango_to_jwm
-from jwm_style.buttons import read_buttons, button_layout, native_segments
-from jwm_style.config import Configuration
+from jwm_tools.style.fonts import jwm_to_pango, pango_to_jwm
+from jwm_tools.style.buttons import read_buttons, button_layout, native_segments
+from jwm_tools.style.config import Configuration
 
 
 class FontTests(unittest.TestCase):

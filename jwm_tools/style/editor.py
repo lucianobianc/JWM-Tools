@@ -9,15 +9,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk
-from .themes import (
-    STYLES,
-    PRESETS,
-    COLLECTIONS,
-    PRESET_METADATA,
-    CUSTOM_DIR,
-    preset_values,
-    custom_styles,
-)
+from .themes import STYLES, CUSTOM_DIR, CURRENT_STYLE
 from .config import flatten, set_nested, start_attributes, Configuration
 from .fonts import jwm_to_pango, pango_to_jwm
 from .preview import draw_preview
@@ -27,7 +19,7 @@ from .themes import StyleStore
 
 class Editor(Gtk.Window):
     def __init__(self, path):
-        super().__init__(title="JWM Style Editor")
+        super().__init__(title="jwm_style")
         self.path = Path(path).expanduser().resolve()
         self.config = Configuration(self.path)
         self.buttons = read_buttons(self.config)
@@ -42,18 +34,12 @@ class Editor(Gtk.Window):
         self.pending = {}
         self.start_pending = {}
         self.loading = False
-        self.custom = custom_styles()
+        self.custom = self.store.load()
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.add(outer)
         top = Gtk.Box(spacing=8)
         outer.pack_start(top, False, False, 0)
-        top.pack_start(Gtk.Label(label="Preset:"), False, False, 0)
-        self.category = Gtk.ComboBoxText()
-        for category in ["All", *COLLECTIONS, "Custom"]:
-            self.category.append_text(category)
-        self.category.set_active(0)
-        self.category.connect("changed", self.on_category)
-        top.pack_start(self.category, False, False, 0)
+        top.pack_start(Gtk.Label(label="Style:"), False, False, 0)
         self.presets = Gtk.ComboBoxText()
         for cell in self.presets.get_cells():
             cell.set_property("ellipsize", 3)
@@ -133,53 +119,26 @@ class Editor(Gtk.Window):
         self.on_section()
 
     def visible_presets(self):
-        category = self.category.get_active_text() or "All"
-        builtin = [
-            name
-            for name in PRESETS
-            if category in ("All", PRESET_METADATA[name]["category"])
-        ]
-        custom = list(self.custom) if category in ("All", "Custom") else []
-        return ["Custom (current configuration)", *builtin, *custom]
-
-    def on_category(self, *_):
-        if self.loading or not hasattr(self, "presets"):
-            return
-        self.loading = True
-        self.refresh_presets()
-        self.loading = False
-        self.on_section()
+        return [CURRENT_STYLE, *self.custom]
 
     def refresh_presets(self, selected=None):
-        self.custom = custom_styles()
+        self.custom = self.store.load()
         self.presets.remove_all()
         choices = self.visible_presets()
         for name in choices:
             self.presets.append_text(name)
         self.presets.set_active(choices.index(selected) if selected in choices else 0)
-        metadata = PRESET_METADATA.get(self.presets.get_active_text(), {})
-        self.presets.set_tooltip_text(
-            " — ".join(
-                filter(None, (metadata.get("reference"), metadata.get("description")))
-            )
-        )
 
     def detect_preset(self):
         actual = flatten(self.values)
-        for name in [*PRESETS, *self.custom]:
-            values = preset_values(name) if name in PRESETS else self.custom[name][0]
+        for name, (values, _) in self.custom.items():
             target = flatten(values)
-            if target and all(actual.get(k) == v for k, v in target.items()):
-                category = (
-                    PRESET_METADATA[name]["category"] if name in PRESETS else "Custom"
-                )
+            if target and all(
+                actual.get(key) == value for key, value in target.items()
+            ):
                 self.loading = True
-                self.category.set_active(
-                    ["All", *COLLECTIONS, "Custom"].index(category)
-                )
                 self.refresh_presets(name)
                 self.loading = False
-                self.on_section()
                 return
 
     def make_button(self, label, callback):
@@ -413,20 +372,9 @@ class Editor(Gtk.Window):
         if self.loading:
             return
         name = self.presets.get_active_text()
-        metadata = PRESET_METADATA.get(name, {})
-        self.presets.set_tooltip_text(
-            " — ".join(
-                filter(None, (metadata.get("reference"), metadata.get("description")))
-            )
-        )
         self.pending.clear()
         self.start_pending.clear()
-        if name in PRESETS:
-            values = preset_values(name)
-        elif name in self.custom:
-            values = self.custom[name][0]
-        else:
-            values = {}
+        values = self.custom[name][0] if name in self.custom else {}
         actual = flatten(self.values)
         self.pending.update(
             {k: v for k, v in flatten(values).items() if actual.get(k) != v}
@@ -497,13 +445,7 @@ class Editor(Gtk.Window):
         dialog.destroy()
         if response != Gtk.ResponseType.OK:
             return
-        if (
-            not name
-            or "/" in name
-            or "\\" in name
-            or name in PRESETS
-            or name == "Custom (current configuration)"
-        ):
+        if not name or "/" in name or "\\" in name or name == CURRENT_STYLE:
             self.error("Choose a nonempty unique style name without path separators.")
             return
         try:
@@ -521,7 +463,6 @@ class Editor(Gtk.Window):
                     return
             self.store.save(name, values, replace=name in self.custom)
             self.loading = True
-            self.category.set_active(0)
             self.refresh_presets(name)
             self.loading = False
             self.update_status()
@@ -552,7 +493,6 @@ class Editor(Gtk.Window):
             not new_name
             or "/" in new_name
             or "\\" in new_name
-            or new_name in PRESETS
             or new_name in self.custom
         ):
             self.error("Choose a unique style name without path separators.")
@@ -560,7 +500,6 @@ class Editor(Gtk.Window):
         try:
             self.store.rename(name, new_name)
             self.loading = True
-            self.category.set_active(0)
             self.refresh_presets(new_name)
             self.loading = False
             self.on_section()
@@ -608,14 +547,14 @@ class Editor(Gtk.Window):
 
 def main():
     import argparse
-    from . import __version__
+    from .. import __version__
 
     parser = argparse.ArgumentParser(
         description="Edit JWM styles while preserving unrelated configuration."
     )
     parser.add_argument("configuration", nargs="?", default=str(Path.home() / ".jwmrc"))
     parser.add_argument(
-        "--version", action="version", version="JWM Style Editor " + __version__
+        "--version", action="version", version="jwm_style " + __version__
     )
     args = parser.parse_args()
     path = Path(args.configuration).expanduser()

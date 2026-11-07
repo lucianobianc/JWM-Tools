@@ -2,7 +2,7 @@
 """Build source and architecture-independent Debian assets without root.
 
 Only Python's standard library and dpkg-deb are required. The .deb contains
-only the style editor; the source archive contains this repository's sources.
+all four tools; the source archive contains this repository's sources.
 SOURCE_DATE_EPOCH controls reproducible timestamps.
 """
 import argparse
@@ -23,8 +23,11 @@ SOURCE_ITEMS = (
     "LICENSE",
     "README.md",
     "docs",
-    "jwm-style-editor",
+    "jwm_audio",
+    "jwm_menu",
+    "jwm_ram",
     "jwm_style",
+    "jwm_tools",
     "tests",
     "tools",
     "packaging",
@@ -58,7 +61,7 @@ def epoch():
     return (
         int(result.stdout.strip())
         if result.returncode == 0
-        else int((ROOT / "jwm-style-editor").stat().st_mtime)
+        else int((ROOT / "jwm_style").stat().st_mtime)
     )
 
 
@@ -76,13 +79,13 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     version = re.search(
         r'__version__\s*=\s*[\'"]([^\'"]+)',
-        (ROOT / "jwm_style/__init__.py").read_text(),
+        (ROOT / "jwm_tools/__init__.py").read_text(),
     ).group(1)
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", version):
         raise SystemExit("Unsupported release version")
     timestamp = epoch()
-    source = output / f"jwm-style-editor-{version}.tar.gz"
-    deb = output / f"jwm-style-editor_{version}-1_all.deb"
+    source = output / f"jwm-tools-{version}.tar.gz"
+    deb = output / f"jwm-tools_{version}-1_all.deb"
     # Normalize gzip/tar metadata so repeated builds produce identical assets.
     with source.open("wb") as raw:
         with gzip.GzipFile(
@@ -91,47 +94,51 @@ def main():
             with tarfile.open(fileobj=compressed, mode="w") as archive:
                 for file in source_files():
                     entry = tarfile.TarInfo(
-                        f"jwm-style-editor-{version}/{file.relative_to(ROOT)}"
+                        f"jwm-tools-{version}/{file.relative_to(ROOT)}"
                     )
                     data = file.read_bytes()
                     entry.size = len(data)
                     entry.mtime = timestamp
                     entry.mode = (
                         0o755
-                        if file.name in ("jwm-style-editor", "build_release.py")
+                        if file.name
+                        in (
+                            "jwm_audio",
+                            "jwm_menu",
+                            "jwm_ram",
+                            "jwm_style",
+                            "build_release.py",
+                            "install.py",
+                        )
                         else 0o644
                     )
                     archive.addfile(entry, io.BytesIO(data))
     with tempfile.TemporaryDirectory(prefix="jwm-deb-", dir=output) as tmp:
         stage = Path(tmp)
-        app = stage / "usr/share/jwm-style-editor"
-        write(
-            app / "jwm-style-editor",
-            (ROOT / "jwm-style-editor")
-            .read_bytes()
-            .replace(b"#!/usr/bin/env python3", b"#!/usr/bin/python3", 1),
-            0o755,
-        )
-        for file in sorted((ROOT / "jwm_style").glob("*.py")):
-            write(app / "jwm_style" / file.name, file.read_bytes())
-        (stage / "usr/bin").mkdir(parents=True)
-        (stage / "usr/bin/jwm-style-editor").symlink_to(
-            "../share/jwm-style-editor/jwm-style-editor"
-        )
-        write(
-            stage / "usr/share/applications/jwm-style-editor.desktop",
-            (ROOT / "packaging/jwm-style-editor.desktop").read_bytes(),
-        )
-        docs = stage / "usr/share/doc/jwm-style-editor"
+        app = stage / "usr/share/jwm-tools"
+        for command in ("jwm_audio", "jwm_menu", "jwm_ram", "jwm_style"):
+            write(
+                app / command,
+                (ROOT / command)
+                .read_bytes()
+                .replace(b"#!/usr/bin/env python3", b"#!/usr/bin/python3", 1),
+                0o755,
+            )
+            (stage / "usr/bin").mkdir(parents=True, exist_ok=True)
+            (stage / "usr/bin" / command).symlink_to("../share/jwm-tools/" + command)
+        for file in sorted((ROOT / "jwm_tools").rglob("*.py")):
+            write(app / file.relative_to(ROOT), file.read_bytes())
+        for file in sorted((ROOT / "packaging").glob("*.desktop")):
+            write(stage / "usr/share/applications" / file.name, file.read_bytes())
+        docs = stage / "usr/share/doc/jwm-tools"
         write(docs / "copyright", (ROOT / "packaging/copyright").read_bytes())
         write(
             docs / "README.md.gz",
             gzip.compress((ROOT / "README.md").read_bytes(), mtime=0),
         )
         changelog = (
-            f"jwm-style-editor ({version}-1) unstable; urgency=medium\n\n"
-            "  * Release the modular GTK 3 style editor with responsive layout,\n"
-            "    native font selection and JWM 2.4.6 title decorations.\n\n"
+            f"jwm-tools ({version}-1) unstable; urgency=medium\n\n"
+            "  * Distribute jwm_audio, jwm_menu, jwm_ram and jwm_style together.\n\n"
             f" -- Luciano Biancardine <lucianobiancardine@gmail.com>  {formatdate(timestamp, usegmt=True)}\n"
         )
         write(docs / "changelog.Debian.gz", gzip.compress(changelog.encode(), mtime=0))

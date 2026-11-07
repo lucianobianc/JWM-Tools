@@ -20,8 +20,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("GdkX11", "3.0")
 from gi.repository import Gtk, Gdk, GdkX11
-from jwm_style.render import draw_window
-from jwm_style.buttons import ButtonConfig, button_layout
+from jwm_tools.style.render import draw_window
+from jwm_tools.style.buttons import ButtonConfig, button_layout
 
 
 def pump():

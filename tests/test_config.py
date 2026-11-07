@@ -3,7 +3,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from unittest.mock import patch
-from jwm_style.config import (
+from jwm_tools.style.config import (
     update_style,
     property_values,
     start_attributes,
@@ -160,7 +160,9 @@ class FilesTests(unittest.TestCase):
         self.assertFalse(self.path.with_name("jwmrc.bak").exists())
 
     def test_atomic_failure_keeps_original_and_cleans_temp(self):
-        with patch("jwm_style.config.os.replace", side_effect=OSError("disk error")):
+        with patch(
+            "jwm_tools.style.config.os.replace", side_effect=OSError("disk error")
+        ):
             with self.assertRaises(OSError):
                 save_atomic(self.path, b"new")
         self.assertEqual(self.path.read_bytes(), self.original)

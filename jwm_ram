@@ -9,7 +9,9 @@ INTERVAL_MS = 1000
 BACKGROUND = '#202020'
 MARGIN = 2
 
+from jwm_tools import __version__
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--version', action='version', version='jwm_ram ' + __version__)
 parser.add_argument('--width', type=int, default=72, metavar='PIXELS',
                     help='total widget width in pixels (default: 72)')
 parser.add_argument('--height', type=int, default=30, metavar='PIXELS',
@@ -175,8 +177,8 @@ def cpu_counters():
     return total, idle
 
 
-root = tk.Tk(className='jwm-ram')
-root.title('jwm-ram')
+root = tk.Tk(className='jwm_ram')
+root.title('jwm_ram')
 root.resizable(False, False)
 root.geometry(f'{args.width}x{args.height}')
 root.configure(bg=background)
