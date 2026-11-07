@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 from unittest.mock import patch
 from jwm_style.config import (
     update_style,
+    property_values,
     start_attributes,
     update_start_attribute,
     Configuration,
@@ -99,6 +100,37 @@ class PatchingTests(unittest.TestCase):
             start_attributes(
                 "<JWM><Tray><TrayButton>root:1</TrayButton><TrayButton>root:2</TrayButton></Tray></JWM>"
             )
+
+
+class DecorationsTests(unittest.TestCase):
+    def test_only_attribute_value_changes(self):
+        text = "<JWM><!--keep--><WindowStyle decorations = 'motif' name=\"a &amp; b\"><Font>Sans-12</Font></WindowStyle></JWM>"
+        result = update_style(text, "WindowStyle", ("@decorations",), "flat")
+        self.assertEqual(result, text.replace("'motif'", "'flat'"))
+        self.assertEqual(property_values(result)["WindowStyle"]["@decorations"], "flat")
+
+    def test_insert_attribute_or_missing_section(self):
+        for text in (
+            "<JWM/>",
+            "<JWM><WindowStyle/></JWM>",
+            "<JWM><WindowStyle><Font>Sans-12</Font></WindowStyle></JWM>",
+        ):
+            result = update_style(text, "WindowStyle", ("@decorations",), "motif")
+            self.assertEqual(
+                ET.fromstring(result).find("WindowStyle").get("decorations"), "motif"
+            )
+            self.assertNotIn("<decorations>", result)
+
+    def test_ambiguous_and_invalid_values_rejected(self):
+        with self.assertRaises(ValueError):
+            update_style(
+                "<JWM><WindowStyle/><WindowStyle/></JWM>",
+                "WindowStyle",
+                ("@decorations",),
+                "flat",
+            )
+        with self.assertRaises(ValueError):
+            update_style("<JWM/>", "WindowStyle", ("@decorations",), "other")
 
 
 class FilesTests(unittest.TestCase):

@@ -117,7 +117,37 @@ def replace_leaf(text, parent, child, value):
     return text[:cj] + safe + text[cj:]
 
 
+def update_decorations(text, value):
+    """Patch only the WindowStyle decorations attribute, keeping other bytes."""
+    if value not in ("motif", "flat"):
+        raise ValueError("Decorations must be motif or flat.")
+    root = _direct(text, "JWM")
+    if len(root) != 1:
+        raise ValueError("Expected a JWM root")
+    rs, re_ = root[0][2:4]
+    sections = _direct(text[rs:re_], "WindowStyle")
+    if not sections:
+        return update_decorations(_append(text, root[0], "WindowStyle", ""), value)
+    if len(sections) != 1:
+        raise ValueError("Multiple WindowStyle blocks; cannot choose one safely.")
+    a, _, cs, _, _ = sections[0]
+    a += rs
+    cs += rs
+    opening = text[a:cs]
+    attributes = re.finditer(
+        r"([A-Za-z_:][\w:.-]*)\s*=\s*([\"'])(.*?)\2", opening, re.S
+    )
+    for attribute in attributes:
+        if attribute.group(1) == "decorations":
+            lo, hi = attribute.span(3)
+            return text[: a + lo] + value + text[a + hi :]
+    end = len(opening) - (2 if opening.endswith("/>") else 1)
+    return text[: a + end] + f' decorations="{value}"' + text[a + end :]
+
+
 def update_style(text, section, property_path, value):
+    if section == "WindowStyle" and property_path == ("@decorations",):
+        return update_decorations(text, value)
     if section not in STYLES or len(property_path) not in (1, 2):
         raise ValueError("Unknown style property")
     if not all(re.fullmatch(r"[A-Za-z_][\w.-]*", p) for p in property_path):
@@ -164,6 +194,8 @@ def property_values(text):
         if node.tag not in STYLES:
             continue
         values = result.setdefault(node.tag, {})
+        if node.tag == "WindowStyle" and node.get("decorations") is not None:
+            values["@decorations"] = node.get("decorations")
         for child in node:
             if child.tag in ("Active", "Minimized"):
                 values.setdefault(child.tag, {}).update(

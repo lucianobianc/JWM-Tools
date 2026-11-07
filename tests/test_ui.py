@@ -61,6 +61,77 @@ class EditorTests(unittest.TestCase):
                 self.assertGreater(self.editor.preview.get_allocated_width(), 0)
         self.assertEqual(self.path.read_bytes(), self.original)
 
+    def test_start_icon_file_selection_is_pending_until_apply(self):
+        self.editor.section.set_active(len(STYLES))
+        row = self.editor.grid.get_child_at(1, 1)
+        entry, button = row.get_children()
+        selected = str(Path(self.temp.name) / "Start & menu.png")
+        Path(selected).touch()
+        with patch("jwm_style.editor.Gtk.FileChooserDialog") as chooser:
+            dialog = chooser.return_value
+            dialog.run.return_value = Gtk.ResponseType.OK
+            dialog.get_filename.return_value = selected
+            button.emit("clicked")
+            dialog.destroy.assert_called_once()
+        self.assertEqual(entry.get_text(), selected)
+        self.assertEqual(self.editor.start_pending["icon"], selected)
+        self.assertEqual(self.path.read_bytes(), self.original)
+        self.assertTrue(self.editor.write())
+        from jwm_style.config import start_attributes
+
+        self.assertEqual(start_attributes(self.path.read_text())["icon"], selected)
+
+    def test_cancelling_start_icon_selection_keeps_existing_value(self):
+        self.editor.section.set_active(len(STYLES))
+        entry, button = self.editor.grid.get_child_at(1, 1).get_children()
+        entry.set_text("existing-icon")
+        with patch("jwm_style.editor.Gtk.FileChooserDialog") as chooser:
+            dialog = chooser.return_value
+            dialog.run.return_value = Gtk.ResponseType.CANCEL
+            button.emit("clicked")
+            dialog.get_filename.assert_not_called()
+            dialog.destroy.assert_called_once()
+        self.assertEqual(entry.get_text(), "existing-icon")
+        self.assertEqual(self.editor.start_pending["icon"], "existing-icon")
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_decorations_preview_and_save_only_selected_attribute(self):
+        chooser = next(
+            child
+            for child in self.editor.grid.get_children()
+            if isinstance(child, Gtk.ComboBoxText)
+        )
+        self.assertEqual(chooser.get_active_id(), "motif")
+        chooser.set_active_id("flat")
+        self.assertEqual(self.path.read_bytes(), self.original)
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 600, 400)
+        with patch("jwm_style.preview.draw_window") as draw:
+            self.editor.draw_preview(self.editor.preview, cairo.Context(surface))
+            self.assertEqual(draw.call_args.args[7].decorations, "flat")
+        self.assertTrue(self.editor.write())
+        self.assertEqual(
+            self.path.read_bytes(),
+            self.original.replace(b'decorations="motif"', b'decorations="flat"'),
+        )
+        self.assertEqual(self.path.with_name("jwmrc.bak").read_bytes(), self.original)
+
+    def test_discard_decorations_restores_original_style(self):
+        chooser = next(
+            child
+            for child in self.editor.grid.get_children()
+            if isinstance(child, Gtk.ComboBoxText)
+        )
+        chooser.set_active_id("flat")
+        self.editor.on_reset()
+        self.assertEqual(self.editor.pending, {})
+        chooser = next(
+            child
+            for child in self.editor.grid.get_children()
+            if isinstance(child, Gtk.ComboBoxText)
+        )
+        self.assertEqual(chooser.get_active_id(), "motif")
+        self.assertEqual(self.path.read_bytes(), self.original)
+
     def test_font_button_conversion_changes_pending_only(self):
         box = self.editor.grid.get_child_at(1, 2)
         button = next(

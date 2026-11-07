@@ -1,6 +1,7 @@
 """GTK editor; configuration changes remain pending until explicitly applied."""
 
 import sys
+import os
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -186,7 +187,7 @@ class Editor(Gtk.Window):
         if section in ("WindowStyle", "TrayStyle", "MenuStyle"):
             fields += [("Opacity",)]
         if section == "WindowStyle":
-            fields += [("Width",), ("Height",), ("Corner",)]
+            fields += [("Width",), ("Height",), ("Corner",), ("@decorations",)]
         if section == "PagerStyle":
             fields += [("Text",)]
         if section in ("WindowStyle", "TaskListStyle", "PagerStyle", "MenuStyle"):
@@ -244,7 +245,19 @@ class Editor(Gtk.Window):
                     entry.set_hexpand(True)
                     entry.set_text(self.start_pending.get(key, attrs.get(key, "")))
                     entry.connect("changed", self.on_start_entry, key)
-                    self.grid.attach(entry, 1, i, 1, 1)
+                    if key == "icon":
+                        row = Gtk.Box(spacing=6)
+                        row.pack_start(entry, True, True, 0)
+                        browse = Gtk.Button.new_from_icon_name(
+                            "document-open-symbolic", Gtk.IconSize.BUTTON
+                        )
+                        browse.set_tooltip_text("Choose icon file…")
+                        browse.get_accessible().set_name("Choose icon file")
+                        browse.connect("clicked", self.on_choose_start_icon, entry)
+                        row.pack_start(browse, False, False, 0)
+                        self.grid.attach(row, 1, i, 1, 1)
+                    else:
+                        self.grid.attach(entry, 1, i, 1, 1)
             self.grid.show_all()
             self.loading = False
             self.update_status()
@@ -252,12 +265,22 @@ class Editor(Gtk.Window):
             return
         for i, path in enumerate(self.fields(section)):
             key = (section, tuple(path))
-            label = Gtk.Label(label=" ".join(path), xalign=0)
+            label = Gtk.Label(
+                label="Decorations" if path == ("@decorations",) else " ".join(path),
+                xalign=0,
+            )
             label.set_line_wrap(True)
             label.set_max_width_chars(15)
             self.grid.attach(label, 0, i, 1, 1)
             value = self.current(section, tuple(path))
-            if path[-1] in ("Foreground", "Background", "Text"):
+            if path == ("@decorations",):
+                chooser = Gtk.ComboBoxText()
+                chooser.append("motif", "Motif")
+                chooser.append("flat", "Flat")
+                chooser.set_active_id(value or self.buttons.decorations)
+                chooser.connect("changed", self.on_decorations)
+                self.grid.attach(chooser, 1, i, 1, 1)
+            elif path[-1] in ("Foreground", "Background", "Text"):
                 chooser = Gtk.ColorButton()
                 rgba = Gdk.RGBA()
                 rgba.parse(value if value and rgba.parse(value) else "#808080")
@@ -286,19 +309,49 @@ class Editor(Gtk.Window):
         button.set_font_desc(jwm_to_pango(value))
         button.set_hexpand(True)
         box.pack_start(button, False, False, 0)
-        advanced = Gtk.Expander(label="Fontconfig string")
-        entry = Gtk.Entry()
-        entry.set_width_chars(12)
-        entry.set_text(value or "")
-        entry.connect("changed", self.on_entry, key)
 
         def selected(chooser):
-            entry.set_text(pango_to_jwm(chooser.get_font_desc(), entry.get_text()))
+            if self.loading:
+                return
+            self.pending[key] = pango_to_jwm(
+                chooser.get_font_desc(), self.current(*key)
+            )
+            self.update_status()
+            self.preview.queue_draw()
 
         button.connect("font-set", selected)
-        advanced.add(entry)
-        box.pack_start(advanced, False, False, 0)
         return box
+
+    def on_choose_start_icon(self, button, entry):
+        dialog = Gtk.FileChooserDialog(
+            title="Choose Start Button icon",
+            transient_for=self,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_buttons(
+            "Cancel", Gtk.ResponseType.CANCEL, "Select icon", Gtk.ResponseType.OK
+        )
+        dialog.set_local_only(True)
+        images = Gtk.FileFilter()
+        images.set_name("Images")
+        images.add_pixbuf_formats()
+        dialog.add_filter(images)
+        all_files = Gtk.FileFilter()
+        all_files.set_name("All files")
+        all_files.add_pattern("*")
+        dialog.add_filter(all_files)
+        current = Path(os.path.expandvars(entry.get_text())).expanduser()
+        if current.is_absolute() and current.is_file():
+            dialog.set_filename(str(current))
+        else:
+            dialog.set_current_folder(str(self.path.parent))
+        try:
+            if dialog.run() == Gtk.ResponseType.OK:
+                filename = dialog.get_filename()
+                if filename:
+                    entry.set_text(filename)
+        finally:
+            dialog.destroy()
 
     def on_start_entry(self, entry, key):
         if self.loading:
@@ -312,6 +365,20 @@ class Editor(Gtk.Window):
             self.start_pending[key] = value
         else:
             self.start_pending.pop(key, None)
+        self.update_status()
+        self.preview.queue_draw()
+
+    def on_decorations(self, chooser):
+        if self.loading:
+            return
+        value = chooser.get_active_id()
+        if value not in ("motif", "flat"):
+            return
+        key = ("WindowStyle", ("@decorations",))
+        if value == self.buttons.decorations:
+            self.pending.pop(key, None)
+        else:
+            self.pending[key] = value
         self.update_status()
         self.preview.queue_draw()
 

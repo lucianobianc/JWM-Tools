@@ -2,11 +2,11 @@
 
 Tools that make it easier to use and configure JWM.
 
-## JWM Style Editor 0.6
+## JWM Style Editor 0.7
 
 A Python/GTK 3 editor with 34 built-in palettes, custom styles, and a live Cairo
-preview. The property panel and preview resize independently. Font fields offer
-a native GTK font chooser and an expandable field for advanced Fontconfig strings.
+preview. The property panel and preview resize independently. Font fields use a native GTK font chooser. WindowStyle offers a Motif/Flat
+decoration selector that updates the preview before applying changes.
 
 On Debian, the editor uses `python3-gi`, `python3-gi-cairo`, `python3-cairo`,
 `python3-tk` (for `jwm-ram`), `gir1.2-gtk-3.0`, and `libfontconfig1`.
@@ -116,7 +116,7 @@ declared in the package; the other tools remain available in the source checkout
 The package does not change your `~/.jwmrc` or start a background service.
 
 ```sh
-sudo apt install ./jwm-style-editor_0.6-1_all.deb
+sudo apt install ./jwm-style-editor_0.7-1_all.deb
 jwm-style-editor --version
 ```
 
@@ -131,4 +131,4 @@ sha256sum -c SHA256SUMS
 The build needs Python 3 and `dpkg-deb`. It includes no vendored dependencies or
 local configuration. Set `SOURCE_DATE_EPOCH` to reproduce artifact timestamps;
 by default it uses the latest Git commit timestamp. Release assets are
-`jwm-style-editor-0.6.tar.gz`, `jwm-style-editor_0.6-1_all.deb`, and `SHA256SUMS`.
+`jwm-style-editor-0.7.tar.gz`, `jwm-style-editor_0.7-1_all.deb`, and `SHA256SUMS`.

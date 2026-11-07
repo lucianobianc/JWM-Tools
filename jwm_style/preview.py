@@ -1,5 +1,7 @@
 """Responsive desktop preview. Rendering never writes configuration."""
 
+from dataclasses import replace
+
 from .render import draw_window, draw_text, fill, derived, lines
 
 
@@ -45,7 +47,11 @@ def draw_preview(self, widget, cr):
             h,
             active,
             self.effective_values(),
-            self.buttons,
+            replace(
+                self.buttons,
+                decorations=self.current("WindowStyle", ("@decorations",))
+                or self.buttons.decorations,
+            ),
             maximized=self.preview_maximized.get_active(),
         )
 

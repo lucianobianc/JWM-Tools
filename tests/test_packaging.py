@@ -10,6 +10,8 @@ import tarfile
 import tempfile
 import unittest
 
+from jwm_style import __version__
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -32,7 +34,7 @@ class PackagingTests(unittest.TestCase):
             env=cls.env,
             capture_output=True,
         )
-        cls.deb = cls.output / "jwm-style-editor_0.6-1_all.deb"
+        cls.deb = cls.output / f"jwm-style-editor_{__version__}-1_all.deb"
         cls.installed = cls.base / "installed"
         subprocess.run(
             ["dpkg-deb", "--extract", str(cls.deb), str(cls.installed)], check=True
@@ -75,10 +77,12 @@ class PackagingTests(unittest.TestCase):
         )
 
     def test_source_archive_includes_sources_tests_license_and_build(self):
-        with tarfile.open(self.output / "jwm-style-editor-0.6.tar.gz") as archive:
+        with tarfile.open(
+            self.output / f"jwm-style-editor-{__version__}.tar.gz"
+        ) as archive:
             members = archive.getmembers()
             files = {member.name for member in members}
-            prefix = "jwm-style-editor-0.6/"
+            prefix = f"jwm-style-editor-{__version__}/"
             for name in (
                 "LICENSE",
                 "jwm-style-editor",
