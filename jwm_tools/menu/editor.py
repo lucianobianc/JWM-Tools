@@ -461,7 +461,10 @@ class MenuEditor(Gtk.Window):
             # Build and validate the replacement before changing the current tree.
             def build(element, parent):
                 node = Node(
-                    element.tag, dict(element.attrib), element.text or "", parent=parent
+                    element.tag,
+                    dict(element.attrib),
+                    (element.text or "") if element.tag in TEXT_KINDS else "",
+                    parent=parent,
                 )
                 self.document.validate(node.kind, node.attrs, node.value)
                 node.children = [build(child, node) for child in element]

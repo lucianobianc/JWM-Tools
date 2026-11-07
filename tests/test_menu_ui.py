@@ -147,6 +147,7 @@ class MenuUITests(unittest.TestCase):
         generated = ET.fromstring(
             '<JWM><Menu label="Utilities"><Program label="Fixture">true</Program></Menu></JWM>'
         )
+        ET.indent(generated, space="    ")
         root = self.window.document.roots()[0]
         target = root.children[0]
         self.select(target)
@@ -176,3 +177,27 @@ class MenuUITests(unittest.TestCase):
             self.window.generate_apps()
             message.assert_called_once()
         self.assertFalse(self.window.document.dirty)
+
+    def test_actual_generation_with_indentation_can_be_confirmed_and_saved(self):
+        from jwm_tools.menu import generator
+
+        apps = Path(self.temp.name) / "apps"
+        apps.mkdir()
+        (apps / "fixture.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=Fixture\nExec=/bin/true %f\nCategories=Utility;\n"
+        )
+        with patch.multiple(
+            generator, HOME=Path(self.temp.name), SEARCH_PATHS=[apps]
+        ), patch.object(self.window, "confirm", return_value=True), patch.object(
+            self.window, "message"
+        ) as message:
+            self.window.buttons["Generate from applications"].clicked()
+            message.assert_not_called()
+        root = self.window.document.roots()[0]
+        self.assertEqual(root.children[0].attrs["label"], "Utilities")
+        self.assertEqual(root.children[0].value, "")
+        self.assertEqual(root.children[0].children[0].value, "/bin/true")
+        self.assertEqual(self.path.read_text(), self.xml)
+        self.assertTrue(self.window.save())
+        self.assertIn("Fixture", self.path.read_text())
+        self.assertEqual(self.path.with_name("jwmrc.bak").read_text(), self.xml)
