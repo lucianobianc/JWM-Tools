@@ -1,0 +1,14 @@
+Package: jwm-style-editor
+Version: @VERSION@-1
+Section: x11
+Priority: optional
+Architecture: all
+Maintainer: Luciano Biancardine <lucianobiancardine@gmail.com>
+Depends: python3:any (>= 3.9), python3-gi, python3-gi-cairo, python3-cairo, gir1.2-gtk-3.0, gir1.2-pango-1.0, libfontconfig1, jwm (>= 2.4)
+Recommends: fonts-dejavu-core
+Homepage: https://github.com/lucianobianc/JWM-Tools
+Description: graphical style editor and live preview for JWM
+ Edit JWM colors, fonts, borders and title buttons with a GTK 3 interface.
+ Includes 34 built-in palettes, custom styles and a Cairo desktop preview.
+ Applies selected XML changes while preserving unrelated configuration,
+ keeping a backup and checking for external modifications.

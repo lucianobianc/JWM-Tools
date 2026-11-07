@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=JWM Style Editor
+Comment=Edit JWM appearance with a live preview
+Comment[pt_BR]=Edite a aparência do JWM com pré-visualização
+Exec=jwm-style-editor
+Icon=preferences-desktop-theme
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=JWM;theme;style;appearance;
+StartupNotify=true

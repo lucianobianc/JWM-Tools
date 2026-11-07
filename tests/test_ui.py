@@ -1,0 +1,212 @@
+import os
+from pathlib import Path
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+import cairo
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, Pango
+from jwm_style.editor import Editor
+from jwm_style.themes import PRESETS, STYLES
+from jwm_style.buttons import ButtonConfig
+from jwm_style.render import draw_window
+
+
+def pump():
+    for _ in range(10):
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
+        time.sleep(0.01)
+
+
+@unittest.skipUnless(os.environ.get("DISPLAY"), "GTK tests require an X11 display")
+class EditorTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / "jwmrc"
+        self.original = b'<JWM><!--keep--><WindowStyle decorations="motif"><Font>JetBrains Mono-12:bold</Font><Foreground>#ffffff</Foreground><Background>#555555</Background></WindowStyle><Tray><TrayButton label="Menu">root:1</TrayButton></Tray></JWM>'
+        self.path.write_bytes(self.original)
+        self.errors = []
+        self.hook = patch.object(
+            sys, "excepthook", lambda *error: self.errors.append(error)
+        )
+        self.hook.start()
+        self.addCleanup(self.hook.stop)
+        self.editor = Editor(self.path)
+        self.editor.show_all()
+        pump()
+        self.addCleanup(self.editor.destroy)
+        self.addCleanup(lambda: self.assertEqual(self.errors, [], str(self.errors)))
+
+    def test_layout_at_multiple_sizes_and_all_sections(self):
+        for width, height in [(680, 480), (800, 600), (1050, 710), (1200, 800)]:
+            self.editor.resize(width, height)
+            pump()
+            self.assertLessEqual(self.editor.get_allocated_width(), width)
+            self.assertLessEqual(self.editor.get_allocated_height(), height)
+            for i, section in enumerate(STYLES + ["Start Button"]):
+                self.editor.section.set_active(i)
+                pump()
+                left = self.editor.scroller.translate_coordinates(self.editor, 0, 0)
+                right = self.editor.preview.translate_coordinates(self.editor, 0, 0)
+                self.assertGreaterEqual(
+                    right[0], left[0] + self.editor.scroller.get_allocated_width()
+                )
+                self.assertFalse(self.editor.scroller.get_hscrollbar().get_mapped())
+                self.assertGreater(self.editor.preview.get_allocated_width(), 0)
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_font_button_conversion_changes_pending_only(self):
+        box = self.editor.grid.get_child_at(1, 2)
+        button = next(
+            child for child in box.get_children() if isinstance(child, Gtk.FontButton)
+        )
+        self.assertEqual(button.get_font_desc().get_family(), "JetBrains Mono")
+        button.set_font_desc(
+            Pango.FontDescription.from_string("DejaVu Sans Mono Bold 14")
+        )
+        button.emit("font-set")
+        self.assertEqual(
+            self.editor.pending[("WindowStyle", ("Font",))], "DejaVu Sans Mono-14:bold"
+        )
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_all_presets_modes_and_window_states_render_without_writing(self):
+        for name in PRESETS:
+            choices = self.editor.visible_presets()
+            self.editor.presets.set_active(choices.index(name))
+            for mode in (0, 1):
+                self.editor.preview_mode.set_active(mode)
+                self.editor.preview_maximized.set_active(bool(mode))
+                surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 600, 400)
+                self.editor.draw_preview(self.editor.preview, cairo.Context(surface))
+        self.assertEqual(self.path.read_bytes(), self.original)
+        self.assertFalse(self.path.with_name("jwmrc.bak").exists())
+
+    def test_preview_clips_to_allocated_bounds(self):
+        class Bounds:
+            def get_allocated_width(self):
+                return 200
+
+            def get_allocated_height(self):
+                return 120
+
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 300, 200)
+        cr = cairo.Context(surface)
+        cr.set_source_rgb(1, 0, 1)
+        cr.paint()
+        self.editor.draw_preview(Bounds(), cr)
+        surface.flush()
+        data = surface.get_data()
+        stride = surface.get_stride()
+        self.assertEqual(
+            bytes(data[150 * stride + 250 * 4 : 150 * stride + 250 * 4 + 4]),
+            b"\xff\x00\xff\xff",
+        )
+
+    def test_write_then_reopen_and_external_change_error(self):
+        self.editor.pending[("WindowStyle", ("Width",))] = "7"
+        self.assertTrue(self.editor.write())
+        self.assertEqual(self.path.with_name("jwmrc.bak").read_bytes(), self.original)
+        self.editor.pending[("WindowStyle", ("Width",))] = "8"
+        self.path.write_text("<JWM/>")
+        with patch.object(self.editor, "error") as error:
+            self.assertFalse(self.editor.write())
+            error.assert_called_once()
+        self.assertEqual(self.path.read_text(), "<JWM/>")
+
+    def test_apply_writes_then_requests_jwm_restart(self):
+        self.editor.pending[("WindowStyle", ("Width",))] = "6"
+        with patch("jwm_style.editor.subprocess.run") as run:
+            run.return_value.returncode = 0
+            self.editor.on_apply()
+            self.assertEqual(run.call_args.args[0], ["jwm", "-restart"])
+            self.assertIn(b"<Width>6</Width>", self.path.read_bytes())
+
+    def test_restart_failure_reports_saved_configuration(self):
+        self.editor.pending[("WindowStyle", ("Width",))] = "6"
+        with patch(
+            "jwm_style.editor.subprocess.run", side_effect=OSError("JWM unavailable")
+        ), patch.object(self.editor, "error") as error:
+            self.editor.on_apply()
+            self.assertIn(
+                "Configuration saved, but restart failed", str(error.call_args)
+            )
+        self.assertIn(b"<Width>6</Width>", self.path.read_bytes())
+
+
+class RenderTests(unittest.TestCase):
+    def test_native_buttons_have_distinct_maximized_state(self):
+        surfaces = []
+        for maximized in (False, True):
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 200, 100)
+            draw_window(
+                cairo.Context(surface),
+                0,
+                0,
+                200,
+                100,
+                True,
+                {"WindowStyle": {"Height": "24"}},
+                ButtonConfig(order="tm"),
+                maximized,
+            )
+            surface.flush()
+            surfaces.append(bytes(surface.get_data()))
+        self.assertNotEqual(*surfaces)
+
+    def test_configured_image_and_focus_override_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for i, color in enumerate([(1, 0, 0), (0, 1, 0)]):
+                path = str(Path(tmp) / f"{i}.png")
+                paths.append(path)
+                s = cairo.ImageSurface(cairo.FORMAT_ARGB32, 10, 10)
+                c = cairo.Context(s)
+                c.set_source_rgb(*color)
+                c.paint()
+                s.write_to_png(path)
+            for focus, expected in [
+                (False, b"\x00\x00\xff\xff"),
+                (True, b"\x00\xff\x00\xff"),
+            ]:
+                surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 100, 60)
+                draw_window(
+                    cairo.Context(surface),
+                    0,
+                    0,
+                    100,
+                    60,
+                    focus,
+                    {"WindowStyle": {"Height": "24", "Width": "4"}},
+                    ButtonConfig(
+                        order="tx",
+                        images={"ButtonClose": paths[0], "ButtonCloseFocus": paths[1]},
+                    ),
+                )
+                surface.flush()
+                offset = 12 * surface.get_stride() + 83 * 4
+                self.assertEqual(
+                    bytes(surface.get_data()[offset : offset + 4]), expected
+                )
+
+    def test_corner_radius_clips_flat_and_motif(self):
+        for decorations in ("flat", "motif"):
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 100, 60)
+            draw_window(
+                cairo.Context(surface),
+                0,
+                0,
+                100,
+                60,
+                True,
+                {"WindowStyle": {"Corner": "8"}},
+                ButtonConfig(decorations=decorations),
+            )
+            surface.flush()
+            self.assertEqual(bytes(surface.get_data()[:4]), b"\x00\x00\x00\x00")

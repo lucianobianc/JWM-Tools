@@ -1,0 +1,20 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: JWM-Tools / JWM Style Editor
+Source: https://github.com/lucianobianc/JWM-Tools
+
+Files: *
+Copyright: Luciano Biancardine and contributors
+License: GPL-2
+ This program is distributed under the GNU General Public License version 2.
+ On Debian systems, the complete text can be found in
+ /usr/share/common-licenses/GPL-2.
+ .
+ The source archive also contains the full license in LICENSE.
+
+Files: jwm_style/render.py jwm_style/buttons.py
+Copyright: Luciano Biancardine and contributors
+           Joe Wingbermuehle and JWM contributors
+License: GPL-2
+ Native decoration geometry follows JWM v2.4.6 src/border.c and src/color.c.
+ The upstream JWM code is distributed under the GNU General Public License
+ version 2. See /usr/share/common-licenses/GPL-2 and the source archive's LICENSE.
