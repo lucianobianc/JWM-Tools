@@ -65,7 +65,9 @@ class KeysUITests(unittest.TestCase):
         self.window.filtered.refilter()
         self.assertEqual(len(self.window.filtered), 1)
         self.window.kind_filter.set_active_id("all")
-        self.window.search.set_text("F8")
+        # Search an action: a short key name can also occur in the random
+        # temporary source path, which is intentionally searchable.
+        self.window.search.set_text("exec:true")
         self.window.filtered.refilter()
         self.assertEqual(len(self.window.filtered), 1)
         self.assertEqual(next(iter(self.window.filtered))[0].attrs["key"], "F8")

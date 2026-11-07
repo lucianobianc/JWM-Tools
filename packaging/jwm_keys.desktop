@@ -5,5 +5,5 @@ Comment=Edit JWM keyboard and mouse bindings
 Exec=jwm_keys
 Icon=preferences-desktop-keyboard-shortcuts
 Terminal=false
-Categories=Settings;DesktopSettings;
+Categories=Utility;
 StartupNotify=true

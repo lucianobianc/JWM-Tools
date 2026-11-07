@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+
+import configparser
+import os
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from ..style.config import save_atomic
+
+HOME = Path.home()
+OUTPUT = HOME / ".jwm-menu"
+CATEGORIES = {
+    "AudioVideo": "Multimedia",
+    "Development": "Development",
+    "Education": "Education",
+    "Game": "Games",
+    "Graphics": "Graphics",
+    "Network": "Internet",
+    "Office": "Office",
+    "Settings": "Settings",
+    "System": "System",
+    "Utility": "Utilities",
+}
+
+SEARCH_PATHS = [
+    *[
+        Path(p) / "applications"
+        for p in os.environ.get(
+            "XDG_DATA_DIRS",
+            "/usr/local/share:/usr/share",
+        ).split(":")
+    ],
+    HOME / ".local/share/applications",
+    HOME / ".local/share/flatpak/exports/share/applications",
+    Path("/var/lib/flatpak/exports/share/applications"),
+]
+
+
+def get_app(path):
+    config = configparser.ConfigParser(interpolation=None, strict=False)
+    config.optionxform = str
+
+    try:
+        config.read(path, encoding="utf-8")
+        entry = config["Desktop Entry"]
+
+        if entry.get("Type") != "Application":
+            return None
+
+        if entry.get("Hidden", "false").lower() == "true":
+            return None
+
+        if entry.get("NoDisplay", "false").lower() == "true":
+            return None
+
+        only = entry.get("OnlyShowIn", "").strip(";").split(";")
+        not_in = entry.get("NotShowIn", "").strip(";").split(";")
+        desktops = os.environ.get("XDG_CURRENT_DESKTOP", "JWM").split(":")
+
+        if only != [""] and not any(d in only for d in desktops):
+            return None
+
+        if any(d in not_in for d in desktops):
+            return None
+
+        name = entry.get("Name", "").strip()
+        command = entry.get("Exec", "").strip()
+
+        if not name or not command:
+            return None
+
+        # Remove Desktop Entry field codes.
+        command = re.sub(r"%[fFuUdDnNickvm]", "", command)
+        command = command.replace("%%", "%").strip()
+
+        if not command:
+            return None
+
+        if entry.get("Terminal", "false").lower() == "true":
+            command = "xfce4-terminal -x " + command
+
+        icon = entry.get("Icon", "").strip()
+        categories = entry.get("Categories", "").split(";")
+
+        category = next(
+            (CATEGORIES[c] for c in categories if c in CATEGORIES),
+            "Other",
+        )
+
+        return name, command, icon, category
+
+    except (OSError, configparser.Error, KeyError):
+        return None
+
+
+def generate_tree():
+    """Build application entries in memory; do not write or launch anything."""
+    apps = {}
+    paths = [HOME / ".local/share/applications", *SEARCH_PATHS]
+
+    for directory in paths:
+        if not directory.is_dir():
+            continue
+
+        for path in sorted(directory.rglob("*.desktop")):
+            # User entries take precedence.
+            identifier = str(path.relative_to(directory)).replace("/", "-")
+
+            if identifier in apps:
+                continue
+
+            app = get_app(path)
+            if app:
+                apps[identifier] = app
+
+    root = ET.Element("JWM")
+
+    groups = {}
+    for name, command, icon, category in apps.values():
+        groups.setdefault(category, []).append((name, command, icon))
+
+    for category in sorted(groups):
+        menu = ET.SubElement(root, "Menu", {"label": category})
+
+        for name, command, icon in sorted(
+            groups[category], key=lambda a: a[0].casefold()
+        ):
+            attrs = {"label": name}
+            if icon:
+                attrs["icon"] = icon
+
+            program = ET.SubElement(menu, "Program", attrs)
+            program.text = command
+
+    ET.indent(root, space="    ")
+    return root, len(apps)
+
+
+def main():
+    root, count = generate_tree()
+    data = ET.tostring(root, encoding="utf-8")
+    target = OUTPUT.resolve()
+    if target.exists():
+        save_atomic(target.with_name(target.name + ".bak"), target.read_bytes())
+    save_atomic(target, data)
+
+    print(f"Menu generated: {OUTPUT} ({count} applications)")

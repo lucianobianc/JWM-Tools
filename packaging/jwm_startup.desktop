@@ -5,5 +5,5 @@ Comment=Manage JWM session commands
 Exec=jwm_startup
 Icon=preferences-system-session
 Terminal=false
-Categories=Settings;DesktopSettings;
+Categories=Utility;
 StartupNotify=true

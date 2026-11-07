@@ -5,7 +5,7 @@ Tools for JWM on Linux/X11. All interfaces use English.
 | Tool | Function | Usage |
 | --- | --- | --- |
 | `jwm_audio` | Master and application volume, output and microphone selection. | `jwm_audio` |
-| `jwm_menu` | Generates `~/.jwm-menu` from installed applications. | `jwm_menu` |
+| `jwm_menu` | Edits the Start menu, submenus and icons; also generates application menus. | `jwm_menu` |
 | `jwm_ram` | RAM, swap, CPU, temperature and battery indicators for the tray. | `jwm_ram --width 72 --height 30` |
 | `jwm_style` | Edits JWM colors, fonts and decorations, with a preview and saved styles. | `jwm_style ~/.jwmrc` |
 | `jwm_keys` | Edits keyboard shortcuts and mouse bindings, with file backups. | `jwm_keys ~/.jwmrc` |
@@ -19,7 +19,7 @@ Download the `.deb` from [Releases](https://github.com/lucianobianc/JWM-Tools/re
 sudo apt install ./jwm-tools_0.1-1_all.deb
 ```
 
-The package contains all six tools. Audio requires PulseAudio or PipeWire with PulseAudio support.
+The package contains all six tools, with launchers under **Utilities**. Audio requires PulseAudio or PipeWire with PulseAudio support.
 
 ## From source
 
@@ -34,7 +34,7 @@ python3 tools/install.py
 Commands are installed in `~/.local/bin`, which must be in your `PATH`.
 Run each command with `--help` for its options.
 
-[Configuration and previous names](docs/usage.md) · [Style editor](docs/style.md) · [Binding editor](docs/keys.md) · [Session commands](docs/startup.md)
+[Configuration and previous names](docs/usage.md) · [Style editor](docs/style.md) · [Menu editor](docs/menu.md) · [Binding editor](docs/keys.md) · [Session commands](docs/startup.md)
 
 ## Development
 

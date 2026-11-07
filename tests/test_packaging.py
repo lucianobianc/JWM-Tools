@@ -142,7 +142,7 @@ class PackagingTests(unittest.TestCase):
         )
         env = dict(os.environ, HOME=str(home), XDG_DATA_DIRS=str(home / "share"))
         subprocess.run(
-            [str(self.installed / "usr/bin/jwm_menu")],
+            [str(self.installed / "usr/bin/jwm_menu"), "--generate"],
             env=env,
             cwd=self.base,
             check=True,
@@ -185,6 +185,21 @@ class PackagingTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(result.stdout.strip(), command + " " + __version__)
+
+        for command in (
+            "jwm_audio",
+            "jwm_menu",
+            "jwm_ram",
+            "jwm_style",
+            "jwm_keys",
+            "jwm_startup",
+        ):
+            desktop = prefix / "share/applications" / (command + ".desktop")
+            self.assertIn("Categories=Utility;", desktop.read_text())
+        self.assertIn(
+            "Exec=jwm_menu\n",
+            (prefix / "share/applications/jwm_menu.desktop").read_text(),
+        )
 
     def test_source_install_refuses_to_overwrite_an_unrelated_command(self):
         prefix = self.base / "occupied"

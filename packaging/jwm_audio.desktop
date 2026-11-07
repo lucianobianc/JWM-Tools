@@ -5,5 +5,5 @@ Comment=Audio mixer for the system tray
 Exec=jwm_audio
 Icon=multimedia-volume-control
 Terminal=false
-Categories=AudioVideo;Audio;Mixer;
+Categories=Utility;
 StartupNotify=false

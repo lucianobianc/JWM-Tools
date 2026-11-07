@@ -11,7 +11,7 @@ Replaces: jwm-style-editor
 Homepage: https://github.com/lucianobianc/JWM-Tools
 Description: audio, menu, resource, style, binding and startup tools for JWM
  jwm_audio controls PulseAudio-compatible devices and application volumes.
- jwm_menu generates a JWM menu from installed desktop entries.
+ jwm_menu edits Start menus and icons or generates an application menu.
  jwm_ram displays Linux resource usage in the tray.
  jwm_style edits JWM appearance and saves personal styles.
  jwm_keys edits keyboard shortcuts and mouse bindings.

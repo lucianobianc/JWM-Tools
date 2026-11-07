@@ -261,6 +261,10 @@ def on_enter(_event):
     tooltip_label.configure(text=tooltip_text())
     place_tooltip()
     tooltip.deiconify()
+    # JWM does not manage override-redirect windows, so -topmost alone cannot
+    # keep this popup above managed clients. Raise it after mapping; no focus
+    # change is needed for a tooltip.
+    tooltip.lift()
 
 
 def on_leave(_event):

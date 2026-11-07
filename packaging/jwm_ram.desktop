@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=jwm_ram
+Comment=Monitor RAM, swap, CPU, temperature and battery
+Exec=jwm_ram
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Utility;
+StartupNotify=false

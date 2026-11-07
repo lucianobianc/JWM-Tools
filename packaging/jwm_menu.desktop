@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=jwm_menu
+Comment=Edit the JWM Start menu
+Exec=jwm_menu
+Icon=preferences-desktop-apps
+Terminal=false
+Categories=Utility;
+StartupNotify=true

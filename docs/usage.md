@@ -1,5 +1,8 @@
 # Configuration
 
+Installed tools appear in the **Utilities** application menu. Regenerate an
+automatically generated JWM menu after installation to refresh its entries.
+
 ## jwm_audio
 
 Run `jwm_audio` in a session with a system tray and PulseAudio, or PipeWire with
@@ -8,7 +11,15 @@ adjust individual applications.
 
 ## jwm_menu
 
-Run `jwm_menu` to update `~/.jwm-menu`. Include it in the JWM menu:
+Run `jwm_menu` for the graphical Start menu editor. It opens `~/.jwmrc`
+when present, or `~/.jwm-menu` otherwise. A path also opens the editor:
+`jwm_menu /path/to/menu`. See [Menu editor](menu.md).
+
+Use **Generate from applications** or **Clear menu** inside the editor; changes
+remain pending until saved. For scripts, run `jwm_menu --generate` to rebuild `~/.jwm-menu` from
+installed applications. Generation replaces that file and backs it up first.
+Keep manual edits in another included file if generation runs automatically.
+Include the generated file in the JWM menu:
 
 ```xml
 <RootMenu>

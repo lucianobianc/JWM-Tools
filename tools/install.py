@@ -25,6 +25,21 @@ def install(prefix):
         if link.exists() or link.is_symlink():
             if not link.is_symlink() or link.resolve() != app / command:
                 raise ValueError(f"Existing command will not be replaced: {link}")
+    desktop_dir = prefix / "share/applications"
+    desktops = sorted((ROOT / "packaging").glob("jwm_*.desktop"))
+    owned = (
+        json.loads(marker.read_text()).get("desktop_files", [])
+        if marker.exists()
+        else []
+    )
+    for source in desktops:
+        target = desktop_dir / source.name
+        if target.is_symlink() or (
+            target.exists()
+            and source.name not in owned
+            and target.read_bytes() != source.read_bytes()
+        ):
+            raise ValueError(f"Existing launcher will not be replaced: {target}")
     app.mkdir(parents=True, exist_ok=True)
     bin_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(
@@ -39,7 +54,15 @@ def install(prefix):
         link = bin_dir / command
         if not link.is_symlink():
             link.symlink_to(app / command)
-    marker.write_text(json.dumps({"commands": list(COMMANDS)}) + "\n")
+    desktop_dir.mkdir(parents=True, exist_ok=True)
+    for source in desktops:
+        shutil.copyfile(source, desktop_dir / source.name)
+    marker.write_text(
+        json.dumps(
+            {"commands": list(COMMANDS), "desktop_files": [p.name for p in desktops]}
+        )
+        + "\n"
+    )
     print(f"Commands installed in {bin_dir}")
 
 
